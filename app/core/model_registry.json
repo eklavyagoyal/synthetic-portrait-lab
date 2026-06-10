@@ -1,0 +1,97 @@
+{
+  "_comment": "Editable model + pricing registry. Prices are USD per image and are NOT authoritative — verify against your provider's current pricing. A null price means 'unknown'; the app will warn and require explicit confirmation before spending. Set PORTRAIT_MODEL_REGISTRY_PATH to point at your own copy.",
+  "_pricing_last_reviewed": "2026-06-09",
+  "providers": {
+    "mock": {
+      "mock-image": {
+        "display_name": "Mock provider (no network, free)",
+        "supports_size": ["256x256", "512x512", "1024x1024"],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.0,
+        "pricing_source": "free local generator",
+        "reports_actual_cost": true
+      }
+    },
+    "openai": {
+      "gpt-image-1": {
+        "display_name": "OpenAI gpt-image-1",
+        "supports_size": ["1024x1024", "1024x1536", "1536x1024"],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.07,
+        "quality_prices": { "low": 0.02, "medium": 0.07, "high": 0.19 },
+        "default_quality": "medium",
+        "supports_quality": ["low", "medium", "high", "auto"],
+        "pricing_source": "gpt-image is billed per token; approx per ~1024x1024 image by quality (low/medium/high ~= $0.02/$0.07/$0.19). Larger sizes cost more, and retried/failed attempts are billed. Verify before use.",
+        "reports_actual_cost": false
+      },
+      "gpt-image-2": {
+        "display_name": "OpenAI GPT Image 2",
+        "supports_size": [
+          "1024x1024",
+          "1024x1536",
+          "1536x1024",
+          "2048x2048",
+          "2048x1152",
+          "1152x2048",
+          "1920x1088",
+          "1088x1920",
+          "3840x2160",
+          "2160x3840"
+        ],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.07,
+        "quality_prices": { "low": 0.02, "medium": 0.07, "high": 0.19 },
+        "default_quality": "medium",
+        "supports_quality": ["low", "medium", "high", "auto"],
+        "pricing_source": "gpt-image is billed per token; approx per ~1024x1024 image by quality (low/medium/high ~= $0.02/$0.07/$0.19). Larger sizes cost more, and retried/failed attempts are billed. Verify before use.",
+        "reports_actual_cost": false
+      }
+    },
+    "google": {
+      "nano-banana": {
+        "display_name": "Google Nano Banana (Gemini 2.5 Flash Image)",
+        "supports_size": ["1024x1024"],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.039,
+        "pricing_source": "Gemini 2.5 Flash Image (~1290 output tokens/image) — verify before use",
+        "reports_actual_cost": false
+      },
+      "nano-banana-pro": {
+        "display_name": "Google Nano Banana Pro (Gemini 3 Pro Image)",
+        "supports_size": ["1024x1024", "2048x2048"],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.134,
+        "pricing_source": "Gemini 3 Pro Image / Nano Banana Pro (1K–2K tier, estimate) — verify before use",
+        "reports_actual_cost": false
+      }
+    },
+    "fal": {
+      "imagen4": {
+        "display_name": "FAL Imagen 4",
+        "supports_size": ["1024x1024"],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.03,
+        "pricing_source": "FAL pricing — verify before use",
+        "reports_actual_cost": false
+      },
+      "flux/dev": {
+        "display_name": "FAL FLUX.1 [dev]",
+        "supports_size": ["1024x1024"],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.025,
+        "pricing_source": "FAL pricing — verify before use",
+        "reports_actual_cost": false
+      }
+    },
+    "replicate": {
+      "black-forest-labs/flux-schnell": {
+        "display_name": "Replicate FLUX schnell",
+        "supports_size": ["1024x1024"],
+        "default_size": "1024x1024",
+        "price_per_image_usd": 0.003,
+        "pricing_source": "Replicate pricing (varies with predict time) — verify before use",
+        "reports_actual_cost": false
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Generated output
+outputs/
+*.png
+!app/**/*.png
+!docs/**/*.png
+
+# Tooling
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
