@@ -24,6 +24,9 @@ from nicegui import ui
 from app.core.buckets import AGE_BUCKETS, ETHNICITY_BUCKETS, GENDER_BUCKETS
 from app.core.config import AppConfig
 from app.core.generator import Generator, RunNotConfirmedError
+from app.core.batch_planner import plan_batch
+from app.core.prompt_builder import build_prompt, framing_label
+import json
 from app.core.models import (
     BatchGenerationRequest,
     DistributionMode,
@@ -55,6 +58,22 @@ COLOR_AMBER = "#FBBF24"
 ACCENT_AGE = "#F59E0B"        # amber
 ACCENT_GENDER = "#A78BFA"     # violet
 ACCENT_ETHNICITY = "#2DD4BF"  # teal
+
+_VARIATION_CHOICES = [
+    ("0 · strict repeatability", 0),
+    ("1 · low variation", 1),
+    ("2 · moderate variation", 2),
+    ("3 · high variation", 3),
+]
+
+_FRAMING_CHOICES = {
+    75: "close headshot · head 75%",
+    60: "standard headshot · head 60%",
+    45: "loose headshot · head 45%",
+    30: "upper body · head 30%",
+}
+
+_QUALITY_CHOICES = ["low", "medium", "high", "auto"]
 
 # Distribution modes that require demographic bucket selections (everything but
 # EXACT, which is request-only and not exposed in this lightweight UI).
@@ -332,19 +351,42 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
         Raises ``ValueError`` (or pydantic validation errors) on invalid input.
         """
         provider, model_id = _split_model_key(str(model_select.value or ""))
+        dist_mode = DistributionMode(dist_select.value)
+        weights = None
+        if dist_mode == DistributionMode.WEIGHTED:
+            weights = {}
+            for bucket, input_field in weight_inputs.items():
+                try:
+                    weights[bucket] = float(input_field.value)
+                except (ValueError, TypeError):
+                    weights[bucket] = 1.0
+
         return BatchGenerationRequest(
             provider=provider,
             model_id=model_id,
             age_buckets=list(age_select.value or []),
             gender_buckets=list(gender_select.value or []),
             ethnicity_buckets=list(ethnicity_select.value or []),
-            distribution_mode=DistributionMode(dist_select.value),
+            distribution_mode=dist_mode,
             total_count=int(batch_number.value or 0),
-            variation_level=int(variation_slider.value or 0),
+            weights=weights,
+            variation_level=int(variation_select.value or 0),
+            size=str(size_select.value or "1024x1024"),
+            quality=str(quality_select.value or "medium"),
+            head_height_pct=int(framing_select.value or 60),
             seed=int(seed_number.value) if seed_number.value not in (None, "") else None,
             concurrency=max(1, int(concurrency_number.value or 1)),
             output_dir=(output_input.value or None) or None,
             filename_prefix=str(prefix_input.value or "portrait"),
+            retry_failed=bool(retry_switch.value),
+            max_retries=int(retries_number.value or 3),
+            save_prompt=bool(save_prompt_switch.value),
+            background=str(opt_bg.value or "plain light gray or off-white background"),
+            expression=str(opt_exp.value or "neutral, natural facial expression"),
+            lighting=str(opt_light.value or "natural studio lighting"),
+            image_style=str(opt_style.value or "photorealistic passport-style studio portrait"),
+            extra_positive_constraints=[line.strip() for line in (opt_pos.value or "").splitlines() if line.strip()],
+            extra_negative_constraints=[line.strip() for line in (opt_neg.value or "").splitlines() if line.strip()],
         )
 
     def refresh_cost() -> None:
@@ -360,6 +402,10 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
             provider, model_id = _split_model_key(key)
             try:
                 info = cfg.pricing.get_model_info(provider, model_id)
+                sizes = info.supports_size or ["1024x1024"]
+                size_select.options = sizes
+                if size_select.value not in sizes:
+                    size_select.value = info.default_size if info.default_size in sizes else sizes[0]
             except Exception:  # noqa: BLE001 - unknown model => no pricing
                 ui.label("pricing unavailable — model not in registry").classes(
                     "text-sm text-warning"
@@ -440,87 +486,111 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
                         "text-xs"
                     ).style(f"color: {COLOR_MUTED};")
 
-                # Model
-                with ui.column().classes("w-full gap-1"):
-                    ui.label("Model").classes("section-label")
-                    model_select = ui.select(
-                        model_options,
-                        value=default_key,
-                        on_change=lambda _: refresh_cost(),
-                    ).props("outlined dense").classes("w-full")
+                # Model + Size + Quality
+                with ui.row().classes("w-full gap-4 items-start no-wrap max-[640px]:flex-wrap"):
+                    with ui.column().classes("flex-[2] gap-1"):
+                        ui.label("Model").classes("section-label")
+                        model_select = ui.select(
+                            model_options, value=default_key, on_change=lambda _: refresh_cost(),
+                        ).props("outlined dense").classes("w-full")
+                    with ui.column().classes("flex-1 gap-1"):
+                        ui.label("Size").classes("section-label")
+                        size_select = ui.select(
+                            ["1024x1024"], value="1024x1024", on_change=lambda _: refresh_cost(),
+                        ).props("outlined dense").classes("w-full")
+                    with ui.column().classes("flex-1 gap-1"):
+                        ui.label("Quality").classes("section-label")
+                        quality_select = ui.select(
+                            _QUALITY_CHOICES, value="medium", on_change=lambda _: refresh_cost(),
+                        ).props("outlined dense").classes("w-full")
 
-                # Batch + distribution
+                # Batch + distribution + Framing + Variation
                 with ui.row().classes("w-full gap-4 items-start no-wrap max-[640px]:flex-wrap"):
                     with ui.column().classes("flex-1 gap-1"):
                         ui.label("Batch size").classes("section-label")
                         batch_number = ui.number(
-                            value=4,
-                            min=1,
-                            step=1,
-                            precision=0,
-                            on_change=lambda _: refresh_cost(),
+                            value=4, min=1, step=1, precision=0, on_change=lambda _: refresh_cost(),
                         ).props("outlined dense").classes("w-full")
                     with ui.column().classes("flex-1 gap-1"):
                         ui.label("Distribution").classes("section-label")
                         dist_select = ui.select(
-                            {m.value: m.value.capitalize() for m in _SELECTABLE_MODES},
-                            value=DistributionMode.EVEN.value,
-                            on_change=lambda _: refresh_cost(),
+                            {m.value: m.value.capitalize() for m in _SELECTABLE_MODES}, value=DistributionMode.EVEN.value, on_change=lambda _: refresh_cost(),
                         ).props("outlined dense").classes("w-full")
-
-                # Variation
-                with ui.column().classes("w-full gap-1"):
-                    variation_label = ui.label("Variation level — 0").classes(
-                        "section-label"
-                    )
-                    variation_slider = ui.slider(
-                        min=0,
-                        max=3,
-                        step=1,
-                        value=0,
-                        on_change=lambda e: variation_label.set_text(
-                            f"Variation level — {int(e.value)}"
-                        ),
-                    ).props("label color=secondary").classes("w-full")
+                with ui.row().classes("w-full gap-4 items-start no-wrap max-[640px]:flex-wrap"):
+                    with ui.column().classes("flex-1 gap-1"):
+                        ui.label("Framing").classes("section-label")
+                        framing_select = ui.select(
+                            _FRAMING_CHOICES, value=60, on_change=lambda _: refresh_cost(),
+                        ).props("outlined dense").classes("w-full")
+                    with ui.column().classes("flex-1 gap-1"):
+                        ui.label("Variation").classes("section-label")
+                        variation_select = ui.select(
+                            {v: k for k, v in _VARIATION_CHOICES}, value=0, on_change=lambda _: refresh_cost(),
+                        ).props("outlined dense").classes("w-full")
 
                 ui.separator().style(f"background: {COLOR_HAIRLINE};")
 
-                # Demographic buckets — tinted by dimension accent
-                ui.label("Demographics").classes("section-label")
+                # Demographic buckets
+                with ui.row().classes("w-full items-center justify-between"):
+                    ui.label("Demographics").classes("section-label")
                 with ui.row().classes("w-full gap-4 items-start no-wrap max-[768px]:flex-wrap"):
                     with ui.column().classes("flex-1 gap-1"):
-                        ui.label("Age").classes("section-label").style(
-                            f"color: {ACCENT_AGE};"
-                        )
-                        age_select = ui.select(
-                            AGE_BUCKETS,
-                            value=[AGE_BUCKETS[1]],
-                            multiple=True,
-                            on_change=lambda _: refresh_cost(),
-                        ).props("outlined dense").classes("w-full")
+                        ui.label("Age").classes("section-label").style(f"color: {ACCENT_AGE};")
+                        age_select = ui.select(AGE_BUCKETS, value=[AGE_BUCKETS[1]], multiple=True, on_change=lambda _: refresh_cost()).props("outlined dense").classes("w-full")
                         _tint_chip_select(age_select, ACCENT_AGE)
                     with ui.column().classes("flex-1 gap-1"):
-                        ui.label("Gender").classes("section-label").style(
-                            f"color: {ACCENT_GENDER};"
-                        )
-                        gender_select = ui.select(
-                            GENDER_BUCKETS,
-                            value=[GENDER_BUCKETS[0], GENDER_BUCKETS[1]],
-                            multiple=True,
-                            on_change=lambda _: refresh_cost(),
-                        ).props("outlined dense").classes("w-full")
+                        ui.label("Gender").classes("section-label").style(f"color: {ACCENT_GENDER};")
+                        gender_select = ui.select(GENDER_BUCKETS, value=[GENDER_BUCKETS[0], GENDER_BUCKETS[1]], multiple=True, on_change=lambda _: refresh_cost()).props("outlined dense").classes("w-full")
                         _tint_chip_select(gender_select, ACCENT_GENDER)
                     with ui.column().classes("flex-1 gap-1"):
-                        ui.label("Ethnicity").classes("section-label").style(
-                            f"color: {ACCENT_ETHNICITY};"
-                        )
-                        ethnicity_select = ui.select(
-                            ETHNICITY_BUCKETS,
-                            value=[ETHNICITY_BUCKETS[0]],
-                            multiple=True,
-                            on_change=lambda _: refresh_cost(),
-                        ).props("outlined dense").classes("w-full")
+                        ui.label("Ethnicity").classes("section-label").style(f"color: {ACCENT_ETHNICITY};")
+                        ethnicity_select = ui.select(ETHNICITY_BUCKETS, value=[ETHNICITY_BUCKETS[0]], multiple=True, on_change=lambda _: refresh_cost()).props("outlined dense").classes("w-full")
                         _tint_chip_select(ethnicity_select, ACCENT_ETHNICITY)
+
+                # Weights Container (Dynamic)
+                weight_inputs: dict[str, ui.number] = {}
+                weights_card = ui.card().classes("w-full gap-2 p-4 mt-2").style(f"background: {COLOR_ELEVATED}; border: 1px solid {COLOR_HAIRLINE}; border-radius: 0.75rem;")
+                weights_card.set_visibility(False)
+                
+                with weights_card:
+                    ui.label("Weights (Weighted Distribution)").classes("section-label text-xs")
+                    weights_grid = ui.grid(columns=3).classes("w-full gap-3")
+                
+                def update_weights_ui(*args):
+                    mode = dist_select.value
+                    if mode != DistributionMode.WEIGHTED.value:
+                        weights_card.set_visibility(False)
+                        return
+                    weights_card.set_visibility(True)
+                    weights_grid.clear()
+                    selected = (age_select.value or []) + (gender_select.value or []) + (ethnicity_select.value or [])
+                    with weights_grid:
+                        for b in selected:
+                            if b not in weight_inputs:
+                                weight_inputs[b] = ui.number(value=1.0, step=0.1, precision=1, on_change=lambda _: refresh_cost()).props('outlined dense')
+                            else:
+                                existing_val = weight_inputs[b].value
+                                weight_inputs[b] = ui.number(value=existing_val, step=0.1, precision=1, on_change=lambda _: refresh_cost()).props('outlined dense')
+                            with ui.row().classes("items-center gap-2"):
+                                ui.label(b).classes("text-xs flex-1 truncate")
+                                weight_inputs[b].classes("w-16")
+
+                dist_select.on_value_change(update_weights_ui)
+                age_select.on_value_change(update_weights_ui)
+                gender_select.on_value_change(update_weights_ui)
+                ethnicity_select.on_value_change(update_weights_ui)
+
+                ui.separator().style(f"background: {COLOR_HAIRLINE};")
+
+                with ui.expansion("Advanced Prompt Options").classes("w-full text-sm"):
+                    with ui.column().classes("w-full gap-3 py-2"):
+                        opt_bg = ui.input(value="plain light gray or off-white background").props('outlined dense label="Background"').classes("w-full")
+                        opt_exp = ui.input(value="neutral, natural facial expression").props('outlined dense label="Expression"').classes("w-full")
+                        opt_light = ui.input(value="natural studio lighting").props('outlined dense label="Lighting"').classes("w-full")
+                        opt_style = ui.input(value="photorealistic passport-style studio portrait").props('outlined dense label="Image Style"').classes("w-full")
+                        with ui.row().classes("w-full gap-4"):
+                            opt_pos = ui.textarea().props('outlined dense label="Extra positive constraints"').classes("flex-1")
+                            opt_neg = ui.textarea().props('outlined dense label="Extra negative constraints"').classes("flex-1")
 
                 ui.separator().style(f"background: {COLOR_HAIRLINE};")
 
@@ -537,18 +607,13 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
                     ).props('outlined dense label="Filename prefix"').classes("flex-1")
 
                 with ui.row().classes("w-full gap-4 items-start no-wrap max-[640px]:flex-wrap"):
-                    seed_number = ui.number(
-                        value=None,
-                        step=1,
-                        precision=0,
-                    ).props('outlined dense label="Seed (optional)"').classes("flex-1")
-                    concurrency_number = ui.number(
-                        value=2,
-                        min=1,
-                        max=32,
-                        step=1,
-                        precision=0,
-                    ).props('outlined dense label="Concurrency"').classes("flex-1")
+                    seed_number = ui.number(value=None, step=1, precision=0).props('outlined dense label="Seed (optional)"').classes("flex-1")
+                    concurrency_number = ui.number(value=2, min=1, max=32, step=1, precision=0).props('outlined dense label="Concurrency"').classes("flex-1")
+                    retries_number = ui.number(value=3, min=0, max=10, step=1, precision=0).props('outlined dense label="Max Retries"').classes("w-24")
+                
+                with ui.row().classes("w-full gap-6 items-center"):
+                    retry_switch = ui.switch("Retry Failed", value=True).props("color=secondary")
+                    save_prompt_switch = ui.switch("Save Prompt", value=True).props("color=secondary")
 
             # ---- Side column: cost + actions ------------------------- #
             with ui.column().classes("gap-5").style("width: 360px; min-width: 320px;"):
@@ -563,13 +628,12 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
                         "Generate", on_click=lambda: open_confirm()
                     ).classes("aurora-btn w-full").props("unelevated no-caps size=lg")
                     with ui.row().classes("w-full gap-2 no-wrap"):
-                        metadata_button = ui.button(
-                            "Metadata", on_click=lambda: open_metadata(), icon="description"
-                        ).props("flat no-caps color=secondary").classes("flex-1")
+                        preview_button = ui.button("Plan Preview", on_click=open_plan_preview, icon="visibility").props("flat no-caps color=secondary").classes("flex-1")
+                        archive_button = ui.button("Archive", on_click=open_archive, icon="history").props("flat no-caps color=secondary").classes("flex-1")
+                    with ui.row().classes("w-full gap-2 no-wrap"):
+                        metadata_button = ui.button("Metadata", on_click=lambda: open_metadata(), icon="description").props("flat no-caps color=secondary").classes("flex-1")
                         metadata_button.disable()
-                        output_button = ui.button(
-                            "Output", on_click=lambda: show_output(), icon="folder_open"
-                        ).props("flat no-caps color=secondary").classes("flex-1")
+                        output_button = ui.button("Output", on_click=lambda: show_output(), icon="folder_open").props("flat no-caps color=secondary").classes("flex-1")
                         output_button.disable()
 
         # ---- Progress ------------------------------------------------ #
@@ -599,6 +663,97 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
     # ------------------------------------------------------------------ #
     # Output / metadata affordances
     # ------------------------------------------------------------------ #
+
+    # ------------------------------------------------------------------ #
+    # Plan Preview / Lightbox / Archive
+    # ------------------------------------------------------------------ #
+    def show_lightbox(result, img_path):
+        with ui.dialog() as dialog, ui.card().classes("studio-card elevated w-full max-w-4xl p-0 gap-0 overflow-hidden"):
+            with ui.row().classes("w-full no-wrap"):
+                ui.image(_image_data_uri(img_path)).classes("w-1/2 h-[512px] object-cover pointer-events-none")
+                with ui.column().classes("w-1/2 p-6 gap-4 overflow-y-auto h-[512px]"):
+                    with ui.row().classes("w-full justify-between items-start"):
+                        ui.label(result.id).classes("text-lg font-bold aurora-text")
+                        ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+                    ui.label(f"Provider: {result.provider} / {result.model}").classes("text-xs mono text-muted")
+                    with ui.row().classes("gap-2 text-xs"):
+                        ui.label(result.age_bucket).classes("q-chip").style(f"background: color-mix(in srgb, {ACCENT_AGE} 22%, transparent); border: 1px solid {ACCENT_AGE}; border-radius: 0.6rem; padding: 2px 6px;")
+                        ui.label(result.gender_bucket).classes("q-chip").style(f"background: color-mix(in srgb, {ACCENT_GENDER} 22%, transparent); border: 1px solid {ACCENT_GENDER}; border-radius: 0.6rem; padding: 2px 6px;")
+                        ui.label(result.ethnicity_bucket).classes("q-chip").style(f"background: color-mix(in srgb, {ACCENT_ETHNICITY} 22%, transparent); border: 1px solid {ACCENT_ETHNICITY}; border-radius: 0.6rem; padding: 2px 6px;")
+                    ui.label(f"Size: {result.size} | Quality: {result.quality} | Variation: {result.variation_level}").classes("text-xs text-muted")
+                    ui.separator().style(f"background: {COLOR_HAIRLINE};")
+                    ui.label("Prompt").classes("section-label")
+                    ui.code(result.prompt).classes("w-full text-xs overflow-auto")
+        dialog.open()
+
+    def open_plan_preview():
+        try:
+            req = build_request()
+            sampled = req.distribution_mode in (DistributionMode.RANDOM, DistributionMode.WEIGHTED) and req.seed is None
+            plan_req = req.model_copy(update={"seed": 1729}) if sampled else req
+            plan = plan_batch(plan_req)
+        except Exception as exc:
+            ui.notify(f"Cannot preview plan: {exc}", type="negative")
+            return
+            
+        with ui.dialog() as dialog, ui.card().classes("studio-card elevated w-full max-w-2xl p-6 gap-4"):
+            title = "Expected Plan (Sampled Preview)" if sampled else "Exact Plan"
+            ui.label(f"{title} — {len(plan)} images").classes("text-lg font-semibold aurora-text")
+            
+            with ui.column().classes("w-full gap-2 max-h-96 overflow-y-auto"):
+                for item in plan[:10]:
+                    opts = item.prompt_options
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label(f"#{item.index+1}").classes("text-xs mono text-muted w-8")
+                        ui.label(opts.age_bucket).classes("text-xs").style(f"color: {ACCENT_AGE};")
+                        ui.label("·").classes("text-muted")
+                        ui.label(opts.gender_bucket).classes("text-xs").style(f"color: {ACCENT_GENDER};")
+                        ui.label("·").classes("text-muted")
+                        ui.label(opts.ethnicity_bucket).classes("text-xs").style(f"color: {ACCENT_ETHNICITY};")
+                if len(plan) > 10:
+                    ui.label(f"... and {len(plan)-10} more.").classes("text-xs text-muted")
+            
+            ui.separator().style(f"background: {COLOR_HAIRLINE};")
+            ui.label("Sample Prompt (#1)").classes("section-label")
+            ui.code(build_prompt(plan[0].prompt_options)).classes("text-xs w-full max-h-40 overflow-auto")
+            
+            with ui.row().classes("w-full justify-end"):
+                ui.button("Close", on_click=dialog.close).props("flat no-caps color=secondary")
+        dialog.open()
+
+    def open_archive():
+        runs = []
+        outputs_dir = Path("outputs")
+        if outputs_dir.exists():
+            for d in sorted(outputs_dir.iterdir(), reverse=True):
+                if d.is_dir() and (d / "manifest.json").exists():
+                    try:
+                        mani = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+                        runs.append(mani)
+                    except Exception:
+                        pass
+                        
+        with ui.dialog() as dialog, ui.card().classes("studio-card elevated w-full max-w-4xl p-6 gap-4"):
+            ui.label("Archive").classes("text-lg font-semibold aurora-text")
+            if not runs:
+                ui.label("No previous runs found.").classes("text-muted")
+            else:
+                with ui.column().classes("w-full gap-2 max-h-[600px] overflow-y-auto"):
+                    for r in runs:
+                        dt = r.get('created_at', '')[:16].replace('T', ' ')
+                        summary = r.get('summary', {})
+                        cost = summary.get('provider_reported_cost_usd') or summary.get('estimated_cost_from_attempts_usd') or 0.0
+                        with ui.card().classes("w-full p-3 gap-1 cursor-pointer gallery-tile").on('click', lambda run_dir=r.get('output_dir'): ui.notify(f"View {run_dir} in files")):
+                            with ui.row().classes("w-full justify-between items-center"):
+                                ui.label(dt).classes("text-sm font-bold text-white")
+                                ui.label(f"${cost:.2f}").classes("text-sm font-bold ok")
+                            with ui.row().classes("w-full justify-between text-xs text-muted"):
+                                ui.label(f"{r.get('provider')}/{r.get('model')} · {r.get('size')} · {r.get('quality')}")
+                                ui.label(f"{summary.get('successful_outputs', 0)} ✓ / {summary.get('failed_outputs', 0)} ✗")
+            with ui.row().classes("w-full justify-end"):
+                ui.button("Close", on_click=dialog.close).props("flat no-caps color=secondary")
+        dialog.open()
+
     def show_output() -> None:
         run = state.get("run")
         if run is None:
@@ -737,9 +892,9 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
                     img_path = Path(run.output_dir) / "images" / result.filename
                     if img_path.exists():
                         with gallery:
-                            with ui.column().classes("items-center gap-1 gallery-tile"):
+                            with ui.column().classes("items-center gap-1 gallery-tile cursor-pointer").on('click', lambda r=result, p=img_path: show_lightbox(r, p)):
                                 ui.image(_image_data_uri(img_path)).classes(
-                                    "w-32 h-32 object-cover"
+                                    "w-32 h-32 object-cover pointer-events-none"
                                 )
                                 ui.label(result.id).classes("gallery-cap")
             elif event.type in (EventType.RUN_COMPLETED, EventType.RUN_CANCELLED):
