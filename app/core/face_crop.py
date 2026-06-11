@@ -1,15 +1,17 @@
 """Post-processing face-mask crop for passport-style portraits.
 
-Since all generated images are centred, front-facing passport portraits with a
-plain background, we use a simple luminance/edge-based approach to find where
-the head actually is, then crop tightly around it:
+Strategy (designed for centred, front-facing passport photos on a plain
+light background):
 
-* Full hair visible with a small margin above.
-* Chin visible with a tiny margin below — minimal/no neck.
-* Sides tightened so the face fills more of the frame.
+1. Detect the head bounding box via luminance scan of the background.
+2. Measure the head height (top-of-hair to chin).
+3. Build a crop box that is a *fixed multiple* of the head height, centred
+   on the face, with a fixed 3:4 portrait aspect ratio.
+4. Resize every output to a consistent resolution (1200×1600 px).
 
-The result matches the "zoomed-in screenshot" look the user wants for face
-masks: complete head including all hair, but no neck/shoulders/torso.
+Because the crop box is always sized relative to the detected head, and every
+output is the same resolution, the result is **consistent across images**:
+the face always occupies the same proportion of the frame.
 """
 
 from __future__ import annotations
@@ -18,28 +20,24 @@ import io
 
 from PIL import Image
 
+# ---- output settings ---------------------------------------------------- #
+OUTPUT_WIDTH = 820
+OUTPUT_HEIGHT = 980
+ASPECT = OUTPUT_WIDTH / OUTPUT_HEIGHT
+
 
 def _find_head_bounds(img: Image.Image) -> tuple[int, int, int, int]:
-    """Find approximate head bounding box using the background colour.
-
-    Passport-style portraits have a plain light-gray / off-white background.
-    We find the head by scanning for the first/last rows and columns that
-    contain non-background pixels.
+    """Find the head bounding box via background-colour scanning.
 
     Returns (top, bottom, left, right) in pixel coordinates.
     """
-    # Convert to grayscale for analysis
     gray = img.convert("L")
     w, h = gray.size
     pixels = gray.load()
 
-    # Background threshold: pixels brighter than this are "background".
-    # Passport photos have light gray / off-white backgrounds (typically > 200).
-    bg_threshold = 200
-    # Minimum fraction of non-bg pixels in a row/col to consider it "content"
-    content_ratio = 0.05
+    bg_threshold = 200  # pixels brighter than this = background
+    content_ratio = 0.05  # min fraction of dark pixels to count as "content"
 
-    # Scan top-down to find where the head starts
     top = 0
     for y in range(h):
         non_bg = sum(1 for x in range(w) if pixels[x, y] < bg_threshold)
@@ -47,7 +45,6 @@ def _find_head_bounds(img: Image.Image) -> tuple[int, int, int, int]:
             top = y
             break
 
-    # Scan bottom-up to find where the head/body ends
     bottom = h - 1
     for y in range(h - 1, -1, -1):
         non_bg = sum(1 for x in range(w) if pixels[x, y] < bg_threshold)
@@ -55,18 +52,16 @@ def _find_head_bounds(img: Image.Image) -> tuple[int, int, int, int]:
             bottom = y
             break
 
-    # Scan left-to-right
     left = 0
     for x in range(w):
-        non_bg = sum(1 for y in range(h) if pixels[x, y] < bg_threshold)
+        non_bg = sum(1 for y_i in range(h) if pixels[x, y_i] < bg_threshold)
         if non_bg / h > content_ratio:
             left = x
             break
 
-    # Scan right-to-left
     right = w - 1
     for x in range(w - 1, -1, -1):
-        non_bg = sum(1 for y in range(h) if pixels[x, y] < bg_threshold)
+        non_bg = sum(1 for y_i in range(h) if pixels[x, y_i] < bg_threshold)
         if non_bg / h > content_ratio:
             right = x
             break
@@ -75,53 +70,68 @@ def _find_head_bounds(img: Image.Image) -> tuple[int, int, int, int]:
 
 
 def apply_face_crop(image_bytes: bytes) -> bytes:
-    """Crop *image_bytes* (PNG/JPEG) to a tight face-mask framing.
+    """Crop and resize to a tight, consistent face-mask framing.
 
-    Strategy:
-    1. Detect the head bounds (top of hair to bottom of body, left ear to right ear).
-    2. The "chin" is estimated at ~55% of the head-content height (from top of
-       hair to bottom of visible body). This works because in passport photos
-       the head-to-shoulder ratio is predictable.
-    3. Crop with: small margin above hair, cut just below chin, moderate side padding.
-
-    Returns the cropped image as PNG bytes.
+    Every output is exactly OUTPUT_WIDTH × OUTPUT_HEIGHT with the face
+    occupying the same relative area, regardless of the source dimensions.
     """
     img = Image.open(io.BytesIO(image_bytes))
     w, h = img.size
 
     head_top, body_bottom, head_left, head_right = _find_head_bounds(img)
 
-    # Total content height (hair to bottom of visible body)
     content_h = body_bottom - head_top
-    # Total content width (left ear to right ear)
     content_w = head_right - head_left
 
     if content_h <= 0 or content_w <= 0:
-        # Fallback: can't detect head, return original
         return image_bytes
 
-    # Estimate chin position: in a standard passport photo, the chin is at
-    # roughly 60-70% of the way from the top of the hair to the bottom of
-    # the visible body (rest is neck/shoulders/collar).
-    chin_y = head_top + int(content_h * 0.65)
+    # --- estimate face geometry ------------------------------------------ #
+    # In passport photos the chin is at ~60-65% of total content height
+    # (content = hair-top to bottom-of-body). The face centre (bridge of
+    # nose) is at ~40% from the top of the hair.
+    face_center_y = head_top + int(content_h * 0.40)
+    face_center_x = (head_left + head_right) // 2
 
-    # --- Build crop box --------------------------------------------------- #
-    # Top: small margin above hair (~5% of head height)
-    margin_top = int(content_h * 0.05)
-    crop_top = max(0, head_top - margin_top)
+    # Head height: from top of hair to estimated chin (~65% of content)
+    head_h = int(content_h * 0.65)
 
-    # Bottom: generous margin below estimated chin (~15% of head height)
-    margin_bottom = int(content_h * 0.15)
-    crop_bottom = min(h, chin_y + margin_bottom)
+    # --- build crop box -------------------------------------------------- #
+    # The crop height = head_height * scale_factor.  A factor of ~1.05 means
+    # the head fills ~95% of the frame vertically (very tight face-mask style).
+    crop_h = int(head_h * 1.05)
+    crop_w = int(crop_h * ASPECT)  # maintain output ratio
 
-    # Sides: some padding around the ears (~12% of content width on each side)
-    margin_side = int(content_w * 0.12)
-    crop_left = max(0, head_left - margin_side)
-    crop_right = min(w, head_right + margin_side)
+    # Centre the crop on the face, biased slightly upward so the forehead/hair
+    # has a tiny margin and the chin sits right at the bottom.
+    # Shift the box so the top of the hair has ~2% padding.
+    crop_top = head_top - int(crop_h * 0.02)
+    crop_bottom = crop_top + crop_h
+    crop_left = face_center_x - crop_w // 2
+    crop_right = crop_left + crop_w
+
+    # --- clamp to image bounds ------------------------------------------- #
+    if crop_top < 0:
+        crop_bottom -= crop_top
+        crop_top = 0
+    if crop_bottom > h:
+        crop_top -= (crop_bottom - h)
+        crop_bottom = h
+        crop_top = max(0, crop_top)
+    if crop_left < 0:
+        crop_right -= crop_left
+        crop_left = 0
+    if crop_right > w:
+        crop_left -= (crop_right - w)
+        crop_right = w
+        crop_left = max(0, crop_left)
 
     cropped = img.crop((crop_left, crop_top, crop_right, crop_bottom))
 
+    # Resize to the fixed output resolution for consistency.
+    result = cropped.resize((OUTPUT_WIDTH, OUTPUT_HEIGHT), Image.LANCZOS)
+
     buf = io.BytesIO()
     fmt = img.format or "PNG"
-    cropped.save(buf, format=fmt)
+    result.save(buf, format=fmt)
     return buf.getvalue()
