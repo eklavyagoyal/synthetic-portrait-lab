@@ -87,25 +87,24 @@ def apply_face_crop(image_bytes: bytes) -> bytes:
         return image_bytes
 
     # --- estimate face geometry ------------------------------------------ #
-    # In passport photos the chin is at ~60-65% of total content height
-    # (content = hair-top to bottom-of-body). The face centre (bridge of
-    # nose) is at ~40% from the top of the hair.
-    face_center_y = head_top + int(content_h * 0.40)
+    # When the initial image has a very tight zoom (e.g. 80% head height),
+    # the bottom of the content might be the neck or shoulders. This makes
+    # content_h an unreliable baseline for the chin position.
+    # Instead, we base the crop strictly on the head width (content_w),
+    # which is very reliable because the ears/hair are always bounded by background.
+    
     face_center_x = (head_left + head_right) // 2
 
-    # Head height: from top of hair to estimated chin (~65% of content)
-    head_h = int(content_h * 0.65)
-
     # --- build crop box -------------------------------------------------- #
-    # The crop height = head_height * scale_factor.  A factor of ~1.10 means
-    # the head fills ~90% of the frame vertically (tight face-mask style).
-    crop_h = int(head_h * 1.10)
-    crop_w = int(crop_h * ASPECT)  # maintain output ratio
+    # A human head is typically 1.4-1.5x taller than it is wide.
+    # We use 1.6x width to guarantee the entire head (hair to chin) fits safely
+    # inside the crop with room to spare.
+    crop_h = int(content_w * 1.6)
+    crop_w = int(crop_h * ASPECT)  # maintain A4 output ratio
 
-    # Centre the crop on the face, biased slightly upward so the forehead/hair
-    # has a tiny margin and the chin sits comfortably above the bottom.
-    # Shift the box so the top of the hair has ~4% padding.
-    crop_top = head_top - int(crop_h * 0.04)
+    # Centre the crop on the face horizontally, and shift the box so the top of
+    # the hair has ~5% padding. This ensures hair is never cut off.
+    crop_top = head_top - int(crop_h * 0.05)
     crop_bottom = crop_top + crop_h
     crop_left = face_center_x - crop_w // 2
     crop_right = crop_left + crop_w
