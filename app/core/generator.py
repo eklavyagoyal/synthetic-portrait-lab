@@ -34,6 +34,7 @@ from .models import (
     utcnow_iso,
 )
 from .prompt_builder import build_prompt
+from .face_crop import apply_face_crop
 from .providers.base import ImageProvider, ProviderAuthError, ProviderError
 from .providers.registry import build_provider
 from .sizes import validate_request_size
@@ -288,6 +289,11 @@ class Generator:
                     quality=run.request.quality,
                 )
                 self.storage.save_image(run.output_dir, item.filename, pr.image_bytes)
+                # Post-processing: apply face-mask crop if requested.
+                if run.request.face_crop:
+                    path = self.storage.image_path(run.output_dir, item.filename)
+                    cropped = apply_face_crop(pr.image_bytes)
+                    path.write_bytes(cropped)
                 # "actual" is ONLY a provider-reported USD amount. If the provider
                 # doesn't report one (OpenAI/Gemini/etc.), we keep it None and the
                 # number stays an estimate — we never echo the estimate as "actual".
