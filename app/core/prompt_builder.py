@@ -128,7 +128,12 @@ def _shoulder_instruction(pct: int) -> str:
 
 def framing_composition_lines(head_height_pct: int, face_crop: bool = False) -> list[str]:
     """Composition guidance describing how large the head should appear."""
-    pct = max(10, min(95, int(head_height_pct)))
+    if face_crop:
+        # Force a very tight initial generation so we have high resolution for the crop
+        pct = max(80, min(95, int(head_height_pct)))
+    else:
+        pct = max(10, min(95, int(head_height_pct)))
+
     lines = [
         "The subject is centered and front-facing.",
     ]

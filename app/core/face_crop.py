@@ -21,9 +21,9 @@ import io
 from PIL import Image
 
 # ---- output settings ---------------------------------------------------- #
-OUTPUT_WIDTH = 820
-OUTPUT_HEIGHT = 980
-ASPECT = OUTPUT_WIDTH / OUTPUT_HEIGHT
+OUTPUT_WIDTH = 2480
+OUTPUT_HEIGHT = 3508
+ASPECT = OUTPUT_WIDTH / OUTPUT_HEIGHT  # A4 proportion (1 : 1.414)
 
 
 def _find_head_bounds(img: Image.Image) -> tuple[int, int, int, int]:
@@ -97,15 +97,15 @@ def apply_face_crop(image_bytes: bytes) -> bytes:
     head_h = int(content_h * 0.65)
 
     # --- build crop box -------------------------------------------------- #
-    # The crop height = head_height * scale_factor.  A factor of ~1.05 means
-    # the head fills ~95% of the frame vertically (very tight face-mask style).
-    crop_h = int(head_h * 1.05)
+    # The crop height = head_height * scale_factor.  A factor of ~1.10 means
+    # the head fills ~90% of the frame vertically (tight face-mask style).
+    crop_h = int(head_h * 1.10)
     crop_w = int(crop_h * ASPECT)  # maintain output ratio
 
     # Centre the crop on the face, biased slightly upward so the forehead/hair
-    # has a tiny margin and the chin sits right at the bottom.
-    # Shift the box so the top of the hair has ~2% padding.
-    crop_top = head_top - int(crop_h * 0.02)
+    # has a tiny margin and the chin sits comfortably above the bottom.
+    # Shift the box so the top of the hair has ~4% padding.
+    crop_top = head_top - int(crop_h * 0.04)
     crop_bottom = crop_top + crop_h
     crop_left = face_center_x - crop_w // 2
     crop_right = crop_left + crop_w
