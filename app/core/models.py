@@ -81,6 +81,7 @@ class PromptOptions(BaseModel):
     image_style: str = "photorealistic passport-style studio portrait"
     extra_positive_constraints: list[str] = Field(default_factory=list)
     extra_negative_constraints: list[str] = Field(default_factory=list)
+    face_crop: bool = False
     seed: Optional[int] = None
 
 
@@ -175,6 +176,7 @@ class BatchGenerationRequest(BaseModel):
     image_style: str = "photorealistic passport-style studio portrait"
     extra_positive_constraints: list[str] = Field(default_factory=list)
     extra_negative_constraints: list[str] = Field(default_factory=list)
+    face_crop: bool = False
 
     # Whether to persist the full rendered prompt into per-image metadata
     save_prompt: bool = True

@@ -356,6 +356,9 @@ class StudioScreen(Screen):
                     yield Vertical(id="weights-box")
                 with Collapsible(title="advanced prompt options · ctrl+o", id="advanced"):
                     with Vertical(id="advanced-box"):
+                        with Horizontal(classes="switch-row"):
+                            yield Switch(value=p.face_crop, id="face-crop-switch")
+                            yield Label("Face Mask Crop (tightly crop around the chin/face)")
                         yield Label("background", classes="field-label")
                         yield Input(
                             value="plain light gray or off-white background", id="opt-background"
@@ -511,6 +514,7 @@ class StudioScreen(Screen):
             extra_positive_constraints=self._extra_lines("#opt-extra-pos"),
             extra_negative_constraints=self._extra_lines("#opt-extra-neg"),
             save_prompt=self.query_one("#save-prompt-switch", Switch).value,
+            face_crop=self.query_one("#face-crop-switch", Switch).value,
         )
 
     def _compose_problems(self, draft_error: Optional[str]) -> list[Problem]:
@@ -928,3 +932,4 @@ class StudioScreen(Screen):
         p.retry_failed = self.query_one("#retry-switch", Switch).value
         p.max_retries = self._field_int("#max-retries", p.max_retries, strict=False) or 0
         p.save_prompt = self.query_one("#save-prompt-switch", Switch).value
+        p.face_crop = self.query_one("#face-crop-switch", Switch).value

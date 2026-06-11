@@ -40,6 +40,7 @@ class Prefs:
     save_prompt: bool = True
     thumb_size: str = "M"         # S | M | L
     seen_welcome: bool = False
+    face_crop: bool = False
     extra: dict = field(default_factory=dict)
 
 

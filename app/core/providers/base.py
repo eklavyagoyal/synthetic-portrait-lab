@@ -41,7 +41,7 @@ class ImageProvider(ABC):
         *,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         **kwargs,
     ) -> None:
         self.api_key = api_key

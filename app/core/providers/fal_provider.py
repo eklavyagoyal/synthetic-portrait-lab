@@ -71,7 +71,7 @@ class FalProvider(ImageProvider):
         *,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         **kwargs,
     ) -> None:
         super().__init__(

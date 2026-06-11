@@ -126,17 +126,21 @@ def _shoulder_instruction(pct: int) -> str:
     return "Upper-body portrait: the chest and upper torso are visible."
 
 
-def framing_composition_lines(head_height_pct: int) -> list[str]:
+def framing_composition_lines(head_height_pct: int, face_crop: bool = False) -> list[str]:
     """Composition guidance describing how large the head should appear."""
     pct = max(10, min(95, int(head_height_pct)))
-    return [
+    lines = [
         "The subject is centered and front-facing.",
-        "Include the full head with clean margin above the hair; "
-        "do not crop the hair, ears, chin, or neck.",
-        f"The head, measured from the top of the hair to the chin, occupies "
-        f"approximately {pct}% of the image height.",
-        _shoulder_instruction(pct),
     ]
+    if face_crop:
+        lines.append("Tight crop around the face; the top of the head, hair, and neck should be cropped out.")
+        lines.append(f"The face occupies approximately {pct}% of the image height.")
+        lines.append("Extreme close-up: only the face is visible.")
+    else:
+        lines.append("Include the full head with clean margin above the hair; do not crop the hair, ears, chin, or neck.")
+        lines.append(f"The head, measured from the top of the hair to the chin, occupies approximately {pct}% of the image height.")
+        lines.append(_shoulder_instruction(pct))
+    return lines
 
 
 def _orientation_requirement(size: Optional[str]) -> str:
@@ -179,6 +183,8 @@ def build_prompt(options: PromptOptions) -> str:
     # request-level defaults (background/expression/lighting/style) take effect,
     # while the structural requirements stay fixed. Defaults render verbatim.
     hard = list(HARD_REQUIREMENTS)
+    if options.face_crop:
+        hard[1] = "Tight face crop: zoom in closely on the face, cropping the top of the head/hair and cropping tightly around the chin, jawline, and cheeks."
     hard[4] = _as_requirement(options.expression)
     hard[5] = _as_requirement(options.background)
     hard[9] = _orientation_requirement(options.size)
@@ -192,7 +198,7 @@ def build_prompt(options: PromptOptions) -> str:
 
     # Composition / framing — how the head sits in the frame
     lines.append("Composition:")
-    for line in framing_composition_lines(options.head_height_pct):
+    for line in framing_composition_lines(options.head_height_pct, options.face_crop):
         lines.append(f"- {line}")
     lines.append("")
 
@@ -221,6 +227,8 @@ def build_prompt(options: PromptOptions) -> str:
 
     # Negative constraints
     negatives = list(NEGATIVE_CONSTRAINTS)
+    if options.face_crop and "Cropped head" in negatives:
+        negatives.remove("Cropped head")
     for extra in options.extra_negative_constraints:
         if extra.strip():
             negatives.append(extra.strip())

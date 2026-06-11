@@ -165,6 +165,7 @@ def plan_batch(req: BatchGenerationRequest) -> list[PlannedItem]:
             image_style=req.image_style,
             extra_positive_constraints=list(req.extra_positive_constraints),
             extra_negative_constraints=list(req.extra_negative_constraints),
+            face_crop=req.face_crop,
             seed=item_seed,
         )
         items.append(

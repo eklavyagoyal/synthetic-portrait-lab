@@ -49,7 +49,7 @@ class ReplicateProvider(ImageProvider):
         *,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(api_key=api_key, base_url=base_url, timeout=timeout, **kwargs)
