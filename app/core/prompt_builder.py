@@ -133,9 +133,9 @@ def framing_composition_lines(head_height_pct: int, face_crop: bool = False) -> 
         "The subject is centered and front-facing.",
     ]
     if face_crop:
-        lines.append("Tight crop around the face; the top of the head, hair, and neck should be cropped out.")
-        lines.append(f"The face occupies approximately {pct}% of the image height.")
-        lines.append("Extreme close-up: only the face is visible.")
+        lines.append("The full head — including ALL hair, forehead, and ears — must be completely visible. Do NOT crop or cut off the top of the head or any hair.")
+        lines.append(f"The head, measured from the top of the hair to the chin, occupies approximately {pct}% of the image height.")
+        lines.append("Crop tightly below the chin: show only minimal neck. No shoulders, collar, or torso should be visible.")
     else:
         lines.append("Include the full head with clean margin above the hair; do not crop the hair, ears, chin, or neck.")
         lines.append(f"The head, measured from the top of the hair to the chin, occupies approximately {pct}% of the image height.")
@@ -184,7 +184,7 @@ def build_prompt(options: PromptOptions) -> str:
     # while the structural requirements stay fixed. Defaults render verbatim.
     hard = list(HARD_REQUIREMENTS)
     if options.face_crop:
-        hard[1] = "Tight face crop: zoom in closely on the face, cropping the top of the head/hair and cropping tightly around the chin, jawline, and cheeks."
+        hard[1] = "Face-mask framing: include the COMPLETE head — all hair, forehead, ears, jawline, and chin MUST be fully visible with nothing cropped. Crop tightly BELOW the chin: show minimal neck and absolutely no shoulders or torso."
     hard[4] = _as_requirement(options.expression)
     hard[5] = _as_requirement(options.background)
     hard[9] = _orientation_requirement(options.size)
@@ -227,8 +227,8 @@ def build_prompt(options: PromptOptions) -> str:
 
     # Negative constraints
     negatives = list(NEGATIVE_CONSTRAINTS)
-    if options.face_crop and "Cropped head" in negatives:
-        negatives.remove("Cropped head")
+    if options.face_crop:
+        negatives.extend(["Cropped hair", "Cut-off forehead", "Visible shoulders or torso"])
     for extra in options.extra_negative_constraints:
         if extra.strip():
             negatives.append(extra.strip())
