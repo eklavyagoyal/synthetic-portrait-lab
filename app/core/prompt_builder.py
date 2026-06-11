@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .models import PromptOptions
-from .sizes import parse_size
+from .sizes import A4_PORTRAIT_ASPECT, parse_size
 
 # Hard requirements are always present, verbatim, in the order below.
 HARD_REQUIREMENTS: list[str] = [
@@ -46,6 +46,19 @@ NEGATIVE_CONSTRAINTS: list[str] = [
     "Frames",
     "Multiple people",
     "Cartoon, illustration, CGI, glamour, fashion, or stylized appearance",
+]
+
+# Extra negatives injected only for A4 face-portrait mode (prompt-only, no post-processing).
+FACE_PORTRAIT_NEGATIVES: list[str] = [
+    "Cut-off, cropped, or clipped chin",
+    "Cut-off, cropped, or clipped hair",
+    "Cut-off, cropped, or clipped ears",
+    "Any part of the face touching or crossing an image edge",
+    "Shoulders, chest, torso, or upper body",
+    "Neck below the jawline",
+    "Clothing, collar, or shirt visible",
+    "Tight zoom that leaves no empty margin around the head",
+    "Landscape orientation",
 ]
 
 # Variation guidance, keyed by level. Higher levels are supersets in spirit:
@@ -81,21 +94,47 @@ _VARIATION_GUIDANCE: dict[int, list[str]] = {
     ],
 }
 
+_FACE_PORTRAIT_VARIATION: dict[int, list[str]] = {
+    0: [
+        "Strict repeatability: identical studio setup, identical head scale, "
+        "identical margins, identical lighting. Minimize variation.",
+    ],
+    1: [
+        "Low variation: keep the same framing, margins, and head scale.",
+        "Permit only very subtle face-shape and hairstyle differences.",
+    ],
+    2: [
+        "Moderate natural variation within the fixed face-portrait framing above:",
+        "- subtle face-shape variation",
+        "- natural hair length and style variation",
+        "- slight, soft lighting variation",
+        "- slight skin-texture variation",
+        "- small differences within a neutral expression",
+        "- do NOT change camera distance, head scale, or margins",
+    ],
+    3: [
+        "High natural variation while strictly preserving every face-portrait rule above:",
+        "- noticeable (but realistic) face-shape variation",
+        "- varied natural hair length and style",
+        "- varied soft studio lighting",
+        "- varied realistic skin texture",
+        "- small natural differences within a neutral expression",
+        "- do NOT change camera distance, head scale, or margins",
+        "- the full head, hair top, ears, jawline, and chin must remain fully visible "
+        "with all required empty margins on every side",
+    ],
+}
 
-def variation_guidance(level: int) -> list[str]:
+
+def variation_guidance(level: int, *, face_crop: bool = False) -> list[str]:
     """Return the permitted-variation lines for a level (clamped to 0–3)."""
     level = max(0, min(3, int(level)))
-    return list(_VARIATION_GUIDANCE[level])
+    table = _FACE_PORTRAIT_VARIATION if face_crop else _VARIATION_GUIDANCE
+    return list(table[level])
 
 
 # --------------------------------------------------------------------------- #
 # Framing — how large the head appears in the frame
-#
-# IMPORTANT: ``head_height_pct`` is a *generation instruction*, not a verified
-# measurement. The model approximates it; it is not mathematically reliable.
-# For exact control, post-process the output:
-#   TODO: detect the face/head bounding box and crop/pad each image so the head
-#   occupies exactly head_height_pct of the height (center-face crop strategy).
 # --------------------------------------------------------------------------- #
 # Preset label -> head-height percentage (top of hair to chin).
 FRAMING_PRESETS: list[tuple[str, int]] = [
@@ -126,22 +165,71 @@ def _shoulder_instruction(pct: int) -> str:
     return "Upper-body portrait: the chest and upper torso are visible."
 
 
-def framing_composition_lines(head_height_pct: int, face_crop: bool = False) -> list[str]:
+def _face_portrait_framing_lines(head_height_pct: int, size: Optional[str]) -> list[str]:
+    """Unambiguous prompt-only instructions for A4 face portraits."""
+    pct = max(50, min(65, int(head_height_pct)))
+    parsed = parse_size(size) if size else None
+    if parsed:
+        width, height = parsed
+        aspect = width / height
+        canvas_line = (
+            f"Canvas: portrait orientation, exactly {width}×{height} pixels "
+            f"(width-to-height ratio ≈ {aspect:.3f}, matching ISO A4 paper at {A4_PORTRAIT_ASPECT:.3f})."
+        )
+    else:
+        canvas_line = (
+            "Canvas: portrait orientation with ISO A4 paper aspect ratio "
+            f"(210 mm wide × 297 mm tall; width-to-height ≈ {A4_PORTRAIT_ASPECT:.3f})."
+        )
+
+    return [
+        "MANDATORY FACE PORTRAIT — follow every rule below exactly; they override all other guidance.",
+        canvas_line,
+        "Subject: exactly one person, front-facing, eyes looking directly at the camera.",
+        (
+            "Framing: show ONLY the head and face — from the highest point of the hair "
+            "down to the lowest point of the chin. Nothing below the chin."
+        ),
+        (
+            "The entire head must be 100% visible and uncropped: top of hair, both ears, "
+            "full jawline, and the complete chin."
+        ),
+        (
+            "Mandatory empty background margins (do not let the head touch any edge): "
+            "at least 12% of image height above the hair, at least 10% below the chin, "
+            "and at least 8% of image width on each side outside the ears."
+        ),
+        (
+            f"Head scale: the head (hair top to chin) should occupy roughly {pct}% of the "
+            "image height — large enough for print detail, small enough to keep every "
+            "required margin."
+        ),
+        "Do NOT show shoulders, neck below the jaw, chest, collar, clothing, or torso.",
+        (
+            "Before finishing, verify: hair top visible with margin above; both ears fully "
+            "visible; entire chin fully visible with margin below; no facial feature cut off "
+            "or touching any edge."
+        ),
+    ]
+
+
+def framing_composition_lines(
+    head_height_pct: int,
+    face_crop: bool = False,
+    *,
+    size: Optional[str] = None,
+) -> list[str]:
     """Composition guidance describing how large the head should appear."""
     if face_crop:
-        # Force a very tight initial generation so we have high resolution for the crop
-        pct = max(80, min(95, int(head_height_pct)))
-    else:
-        pct = max(10, min(95, int(head_height_pct)))
+        return _face_portrait_framing_lines(head_height_pct, size)
 
-    lines = [
+    pct = max(10, min(95, int(head_height_pct)))
+    return [
         "The subject is centered and front-facing.",
+        "Include the full head with clean margin above the hair; do not crop the hair, ears, chin, or neck.",
+        f"The head, measured from the top of the hair to the chin, occupies approximately {pct}% of the image height.",
+        _shoulder_instruction(pct),
     ]
-    # face_crop is handled via post-processing; prompt always generates a normal portrait.
-    lines.append("Include the full head with clean margin above the hair; do not crop the hair, ears, chin, or neck.")
-    lines.append(f"The head, measured from the top of the hair to the chin, occupies approximately {pct}% of the image height.")
-    lines.append(_shoulder_instruction(pct))
-    return lines
 
 
 def _orientation_requirement(size: Optional[str]) -> str:
@@ -184,7 +272,6 @@ def build_prompt(options: PromptOptions) -> str:
     # request-level defaults (background/expression/lighting/style) take effect,
     # while the structural requirements stay fixed. Defaults render verbatim.
     hard = list(HARD_REQUIREMENTS)
-    # face_crop is handled entirely via post-processing, not prompt changes.
     hard[4] = _as_requirement(options.expression)
     hard[5] = _as_requirement(options.background)
     hard[9] = _orientation_requirement(options.size)
@@ -196,9 +283,13 @@ def build_prompt(options: PromptOptions) -> str:
             lines.append(f"- {extra.strip()}")
     lines.append("")
 
-    # Composition / framing — how the head sits in the frame
-    lines.append("Composition:")
-    for line in framing_composition_lines(options.head_height_pct, options.face_crop):
+    section_title = "Face portrait framing:" if options.face_crop else "Composition:"
+    lines.append(section_title)
+    for line in framing_composition_lines(
+        options.head_height_pct,
+        options.face_crop,
+        size=options.size,
+    ):
         lines.append(f"- {line}")
     lines.append("")
 
@@ -219,7 +310,7 @@ def build_prompt(options: PromptOptions) -> str:
 
     # Permitted variation
     lines.append(f"Permitted natural variation (variation level {options.variation_level}):")
-    for g in variation_guidance(options.variation_level):
+    for g in variation_guidance(options.variation_level, face_crop=options.face_crop):
         lines.append(g if g.startswith("-") else f"- {g}")
     if options.seed is not None:
         lines.append(f"- Deterministic seed in effect: {options.seed}.")
@@ -227,6 +318,8 @@ def build_prompt(options: PromptOptions) -> str:
 
     # Negative constraints
     negatives = list(NEGATIVE_CONSTRAINTS)
+    if options.face_crop:
+        negatives.extend(FACE_PORTRAIT_NEGATIVES)
     for extra in options.extra_negative_constraints:
         if extra.strip():
             negatives.append(extra.strip())

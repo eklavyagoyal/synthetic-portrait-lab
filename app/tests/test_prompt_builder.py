@@ -162,3 +162,29 @@ def test_landscape_and_portrait_replace_the_square_line() -> None:
     portrait = build_prompt(_options(size="1024x1536"))
     assert "1:1 square image." not in portrait
     assert "Vertical (portrait) orientation" in portrait
+
+
+# --- A4 face portrait (prompt-only) --------------------------------------- #
+def test_face_portrait_mode_uses_explicit_framing_not_generic_composition() -> None:
+    prompt = build_prompt(_options(face_crop=True, head_height_pct=75, size="2368x3344"))
+    assert "Face portrait framing:" in prompt
+    assert "MANDATORY FACE PORTRAIT" in prompt
+    assert "at least 12% of image height above the hair" in prompt
+    assert "at least 10% below the chin" in prompt
+    assert "Do NOT show shoulders" in prompt
+    assert "Composition:" not in prompt
+    assert "Tight headshot: only the neck" not in prompt
+    assert "approximately 80% of the image height" not in prompt
+
+
+def test_face_portrait_mode_adds_extra_negatives_and_blocks_framing_drift() -> None:
+    prompt = build_prompt(_options(face_crop=True, variation_level=3))
+    assert "Cut-off, cropped, or clipped chin" in prompt
+    assert "Shoulders, chest, torso, or upper body" in prompt
+    assert "do NOT change camera distance, head scale, or margins" in prompt
+    assert "slight camera-distance variation" not in prompt
+
+
+def test_face_portrait_head_scale_capped_for_safe_margins() -> None:
+    prompt = build_prompt(_options(face_crop=True, head_height_pct=75))
+    assert "roughly 65% of the image height" in prompt

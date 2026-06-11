@@ -34,10 +34,9 @@ from .models import (
     utcnow_iso,
 )
 from .prompt_builder import build_prompt
-from .face_crop import apply_face_crop
 from .providers.base import ImageProvider, ProviderAuthError, ProviderError
 from .providers.registry import build_provider
-from .sizes import validate_request_size
+from .sizes import resolve_a4_portrait_size, validate_request_size
 from .storage import Storage, new_run_id
 
 EventCallback = Callable[[GenerationEvent], None]
@@ -62,6 +61,15 @@ class Generator:
     def create_run(self, request: BatchGenerationRequest) -> Run:
         self._validate_buckets(request)
         model_info = self.pricing.get_model_info(request.provider, request.model_id)
+
+        if request.face_crop:
+            request = request.model_copy(
+                update={
+                    "size": resolve_a4_portrait_size(
+                        request.provider, request.model_id, model_info
+                    )
+                }
+            )
 
         # Size must be a listed preset, or — for models that accept custom sizes
         # (gpt-image-2) — satisfy that model's resolution constraints.
@@ -289,11 +297,6 @@ class Generator:
                     quality=run.request.quality,
                 )
                 self.storage.save_image(run.output_dir, item.filename, pr.image_bytes)
-                # Post-processing: apply face-mask crop if requested.
-                if run.request.face_crop:
-                    path = self.storage.image_path(run.output_dir, item.filename)
-                    cropped = apply_face_crop(pr.image_bytes)
-                    path.write_bytes(cropped)
                 # "actual" is ONLY a provider-reported USD amount. If the provider
                 # doesn't report one (OpenAI/Gemini/etc.), we keep it None and the
                 # number stays an estimate — we never echo the estimate as "actual".

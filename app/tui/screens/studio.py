@@ -358,7 +358,7 @@ class StudioScreen(Screen):
                     with Vertical(id="advanced-box"):
                         with Horizontal(classes="switch-row"):
                             yield Switch(value=p.face_crop, id="face-crop-switch")
-                            yield Label("Face Mask Crop (tightly crop around the chin/face)")
+                            yield Label("A4 face portrait (prompt-only — head only, no clipping)")
                         yield Label("background", classes="field-label")
                         yield Input(
                             value="plain light gray or off-white background", id="opt-background"

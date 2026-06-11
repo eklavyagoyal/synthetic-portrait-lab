@@ -25,6 +25,16 @@ GPT_IMAGE_2_MAX_PIXELS = 8_294_400
 # Provider/model pairs that accept custom sizes beyond their listed presets.
 _CUSTOM_SIZE_MODELS = {("openai", "gpt-image-2")}
 
+# ISO A4 portrait aspect ratio (210 mm × 297 mm).
+A4_PORTRAIT_ASPECT = 210 / 297
+
+# Preferred A4 portrait generation sizes, highest quality first.
+_A4_PORTRAIT_CANDIDATES = (
+    "2368x3344",  # ~7.9 MP, closest to A4 at high resolution
+    "1760x2496",
+    "1152x1632",
+)
+
 
 def parse_size(size: str) -> Optional[tuple[int, int]]:
     """Parse ``"WIDTHxHEIGHT"`` into ``(width, height)``; ``None`` if malformed."""
@@ -68,6 +78,34 @@ def gpt_image_2_size_error(width: int, height: int) -> Optional[str]:
 def is_valid_gpt_image_2_size(width: int, height: int) -> bool:
     """True if ``width x height`` satisfies every gpt-image-2 constraint."""
     return gpt_image_2_size_error(width, height) is None
+
+
+def _aspect_delta(size: str, target_aspect: float) -> float:
+    parsed = parse_size(size)
+    if parsed is None:
+        return float("inf")
+    width, height = parsed
+    if height <= width:
+        return float("inf")
+    return abs((width / height) - target_aspect)
+
+
+def resolve_a4_portrait_size(provider: str, model_id: str, model_info: ModelInfo) -> str:
+    """Pick the best portrait size for A4-ratio face portraits on this model."""
+    if accepts_custom_sizes(provider, model_id):
+        for candidate in _A4_PORTRAIT_CANDIDATES:
+            parsed = parse_size(candidate)
+            if parsed and gpt_image_2_size_error(*parsed) is None:
+                return candidate
+
+    portrait_presets = [
+        s
+        for s in model_info.supports_size
+        if (parsed := parse_size(s)) and parsed[1] > parsed[0]
+    ]
+    if not portrait_presets:
+        return model_info.default_size
+    return min(portrait_presets, key=lambda s: _aspect_delta(s, A4_PORTRAIT_ASPECT))
 
 
 def validate_request_size(size: str, model_info: ModelInfo) -> None:
