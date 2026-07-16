@@ -357,6 +357,9 @@ class StudioScreen(Screen):
                 with Collapsible(title="advanced prompt options · ctrl+o", id="advanced"):
                     with Vertical(id="advanced-box"):
                         with Horizontal(classes="switch-row"):
+                            yield Switch(value=p.diversify, id="diversify-switch")
+                            yield Label("diversify (unique appearance per image — prevents look-alikes)")
+                        with Horizontal(classes="switch-row"):
                             yield Switch(value=p.face_crop, id="face-crop-switch")
                             yield Label("A4 face portrait (prompt-only — head only, no clipping)")
                         yield Label("background", classes="field-label")
@@ -515,6 +518,7 @@ class StudioScreen(Screen):
             extra_negative_constraints=self._extra_lines("#opt-extra-neg"),
             save_prompt=self.query_one("#save-prompt-switch", Switch).value,
             face_crop=self.query_one("#face-crop-switch", Switch).value,
+            diversify=self.query_one("#diversify-switch", Switch).value,
         )
 
     def _compose_problems(self, draft_error: Optional[str]) -> list[Problem]:
@@ -933,3 +937,4 @@ class StudioScreen(Screen):
         p.max_retries = self._field_int("#max-retries", p.max_retries, strict=False) or 0
         p.save_prompt = self.query_one("#save-prompt-switch", Switch).value
         p.face_crop = self.query_one("#face-crop-switch", Switch).value
+        p.diversify = self.query_one("#diversify-switch", Switch).value

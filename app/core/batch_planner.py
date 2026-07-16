@@ -19,7 +19,9 @@ from __future__ import annotations
 import random
 from collections import Counter
 from itertools import product
+from typing import Optional
 
+from .appearance import Appearance, sample_appearance
 from .models import (
     BatchGenerationRequest,
     DistributionMode,
@@ -28,6 +30,39 @@ from .models import (
 )
 
 Triple = tuple[str, str, str]  # (age, gender, ethnicity)
+
+# Max rejection-sampling attempts before accepting a near-duplicate. The space is
+# in the trillions, so this ceiling is never reached in practice; it only bounds
+# the (impossible) pathological case where a triple's small sub-space is exhausted.
+_MAX_APPEARANCE_TRIES = 5000
+
+
+def _unique_appearance(
+    rng: random.Random,
+    *,
+    age: str,
+    gender: str,
+    ethnicity: str,
+    seen: set[str],
+) -> Appearance:
+    """Sample an appearance whose signature is not already in ``seen``.
+
+    Each redraw advances ``rng``, so candidates differ; the accepted signature is
+    added to ``seen`` so later items (and the cross-run registry) stay distinct.
+    """
+    last: Optional[Appearance] = None
+    for _ in range(_MAX_APPEARANCE_TRIES):
+        cand = sample_appearance(
+            rng, age_bucket=age, gender_bucket=gender, ethnicity_bucket=ethnicity
+        )
+        last = cand
+        sig = cand.signature()
+        if sig not in seen:
+            seen.add(sig)
+            return cand
+    # Sub-space genuinely exhausted (only possible for a tiny custom bucket).
+    seen.add(last.signature())  # type: ignore[union-attr]
+    return last  # type: ignore[return-value]
 
 
 class PlanningError(ValueError):
@@ -133,9 +168,19 @@ def _exact(req: BatchGenerationRequest) -> list[Triple]:
     return triples
 
 
-def plan_batch(req: BatchGenerationRequest) -> list[PlannedItem]:
-    """Produce the ordered list of :class:`PlannedItem` for a request."""
+def plan_batch(
+    req: BatchGenerationRequest,
+    *,
+    seen_signatures: Optional[set[str]] = None,
+) -> list[PlannedItem]:
+    """Produce the ordered list of :class:`PlannedItem` for a request.
+
+    ``seen_signatures`` seeds the per-image appearance dedup set (typically the
+    signatures of every prior run) so the batch repeats nothing already produced.
+    It is copied, never mutated in place.
+    """
     rng = random.Random(req.seed)
+    seen: set[str] = set(seen_signatures or ())
 
     if req.distribution_mode == DistributionMode.EVEN:
         triples = _even(req)
@@ -152,6 +197,19 @@ def plan_batch(req: BatchGenerationRequest) -> list[PlannedItem]:
     for index, (age, gender, ethnicity) in enumerate(triples):
         item_seed = None if req.seed is None else req.seed + index
         item_id = f"{req.filename_prefix}_{index + 1:06d}"
+
+        appearance: Optional[Appearance] = None
+        if req.diversify:
+            # A per-item RNG keyed by (base seed, index) keeps plans reproducible
+            # while making each item's appearance independent. With no base seed
+            # we still vary by index; the cross-run registry (seen_signatures)
+            # diverges otherwise-identical seedless reruns via rejection sampling.
+            base = req.seed if req.seed is not None else 0
+            item_rng = random.Random((base + 1) * 2654435761 ^ (index * 40503 + 17))
+            appearance = _unique_appearance(
+                item_rng, age=age, gender=gender, ethnicity=ethnicity, seen=seen
+            )
+
         options = PromptOptions(
             age_bucket=age,
             gender_bucket=gender,
@@ -167,6 +225,7 @@ def plan_batch(req: BatchGenerationRequest) -> list[PlannedItem]:
             extra_negative_constraints=list(req.extra_negative_constraints),
             face_crop=req.face_crop,
             seed=item_seed,
+            appearance=appearance,
         )
         items.append(
             PlannedItem(

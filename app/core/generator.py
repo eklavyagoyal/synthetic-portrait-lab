@@ -20,6 +20,7 @@ from typing import Awaitable, Callable, Optional
 from .batch_planner import plan_batch
 from .buckets import validate_selection
 from .config import AppConfig
+from .diversity import load_seen_signatures
 from .metadata import MetadataWriter
 from .models import (
     BatchGenerationRequest,
@@ -75,11 +76,18 @@ class Generator:
         # (gpt-image-2) — satisfy that model's resolution constraints.
         validate_request_size(request.size, model_info)
 
-        plan = plan_batch(request)
-        estimate = self.pricing.estimate(request)
-
         run_id = new_run_id()
         output_dir = self.storage.resolve_run_dir(run_id, request.output_dir)
+
+        # Seed appearance dedup with every prior run's signatures so the new batch
+        # repeats nothing already generated (scan the run dir's siblings — the new
+        # run dir does not exist yet, so it contributes nothing).
+        seen: set[str] = set()
+        if request.diversify and request.dedup_history:
+            seen = load_seen_signatures(Path(output_dir).parent)
+
+        plan = plan_batch(request, seen_signatures=seen)
+        estimate = self.pricing.estimate(request)
 
         return Run(
             run_id=run_id,
@@ -267,6 +275,9 @@ class Generator:
             size=run.request.size,
             quality=run.request.quality,
             seed=opts.seed,
+            exact_age=opts.appearance.exact_age if opts.appearance else None,
+            appearance_signature=opts.appearance.signature() if opts.appearance else None,
+            appearance=opts.appearance.model_dump() if opts.appearance else None,
             estimated_cost_usd=est_price,
             status=ItemStatus.RUNNING,
         )

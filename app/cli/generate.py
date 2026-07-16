@@ -125,6 +125,18 @@ def _build_parser(cfg: AppConfig) -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, help="Base seed for reproducibility.")
     parser.add_argument(
+        "--no-diversify",
+        action="store_true",
+        help="Disable the per-image appearance layer (faces will look alike on "
+        "seedless models). Diversification is ON by default.",
+    )
+    parser.add_argument(
+        "--no-dedup-history",
+        action="store_true",
+        help="Do not dedup against prior runs in the output directory; still keeps "
+        "the current batch internally unique.",
+    )
+    parser.add_argument(
         "--concurrency", type=int, default=1, help="Parallel requests (default: %(default)s)."
     )
     parser.add_argument(
@@ -236,6 +248,8 @@ def _build_request(args: argparse.Namespace, cfg: AppConfig) -> BatchGenerationR
         retry_failed=not args.no_retry,
         max_retries=args.max_retries,
         concurrency=args.concurrency,
+        diversify=not args.no_diversify,
+        dedup_history=not args.no_dedup_history,
     )
 
 

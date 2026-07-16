@@ -37,6 +37,7 @@ NEGATIVE_CONSTRAINTS: list[str] = [
     "Three-quarter view",
     "Hats",
     "Sunglasses",
+    "Glasses, spectacles, or eyewear of any kind",
     "Masks",
     "Face paint",
     "Heavy accessories",
@@ -301,6 +302,19 @@ def build_prompt(options: PromptOptions) -> str:
         f"- Apparent ancestry / skin-tone diversity target: {options.ethnicity_bucket}"
     )
     lines.append("")
+
+    # Distinct individual — the per-image appearance layer. This is what makes
+    # every portrait a unique person rather than a re-roll of an identical prompt.
+    # It never relaxes the hard requirements above; expression stays neutral, the
+    # face stays front-facing, no eyewear is added, accessories stay minimal.
+    if options.appearance is not None:
+        lines.append(
+            "Distinct individual — render ONE specific, unique person with exactly "
+            "these features (do not blend toward a generic average face):"
+        )
+        for line in options.appearance.to_prompt_lines():
+            lines.append(f"- {line}")
+        lines.append("")
 
     # Style + lighting (descriptive context, not a hard structural requirement)
     lines.append("Style:")

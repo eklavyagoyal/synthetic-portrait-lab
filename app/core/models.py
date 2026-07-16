@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .appearance import Appearance
+
 
 # --------------------------------------------------------------------------- #
 # Enums
@@ -83,6 +85,10 @@ class PromptOptions(BaseModel):
     extra_negative_constraints: list[str] = Field(default_factory=list)
     face_crop: bool = False
     seed: Optional[int] = None
+    # Per-image, sampled physical individual. When present the prompt describes a
+    # specific, unrepeatable person; when None the prompt stays demographic-only
+    # (legacy behaviour). Set by the planner when diversification is enabled.
+    appearance: Optional[Appearance] = None
 
 
 class ModelInfo(BaseModel):
@@ -149,6 +155,13 @@ class BatchGenerationRequest(BaseModel):
     total_count: int = Field(0, ge=0)
     weights: Optional[dict[str, float]] = None       # bucket-token -> weight (WEIGHTED)
     exact_counts: Optional[list[ExactCount]] = None  # explicit per-triple counts (EXACT)
+
+    # Per-image appearance diversification. When on, the planner samples a unique
+    # individual (exact age, sub-ancestry, hair, face, etc.) per image and
+    # rejection-dedupes so no two images repeat. ``dedup_history`` extends that
+    # guarantee across prior runs by seeding the dedup set from earlier outputs.
+    diversify: bool = True
+    dedup_history: bool = True
 
     # Generation knobs
     variation_level: int = Field(0, ge=0, le=3)
@@ -268,6 +281,10 @@ class GenerationResult(BaseModel):
     size: str
     quality: str = "medium"
     seed: Optional[int] = None
+    # Diversification audit trail (None on legacy / non-diversified runs).
+    exact_age: Optional[int] = None
+    appearance_signature: Optional[str] = None  # dedup key — see appearance.Appearance
+    appearance: Optional[dict] = None            # full sampled descriptor
     estimated_cost_usd: Optional[float] = None   # local per-image estimate
     actual_cost_usd: Optional[float] = None      # provider-reported $ ONLY (None if unreported)
     cost_is_estimated: bool = True               # True => no provider-reported cost available
@@ -288,10 +305,13 @@ class GenerationResult(BaseModel):
         rec["age_bucket"] = self.age_bucket
         rec["gender_bucket"] = self.gender_bucket
         rec["ethnicity_bucket"] = self.ethnicity_bucket
+        rec["exact_age"] = self.exact_age
         rec["variation_level"] = self.variation_level
         rec["size"] = self.size
         rec["quality"] = self.quality
         rec["seed"] = self.seed
+        rec["appearance_signature"] = self.appearance_signature
+        rec["appearance"] = self.appearance
         rec["estimated_cost_usd"] = self.estimated_cost_usd
         rec["actual_cost_usd"] = self.actual_cost_usd
         rec["cost_is_estimated"] = self.cost_is_estimated

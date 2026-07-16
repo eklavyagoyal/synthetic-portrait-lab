@@ -41,6 +41,7 @@ class Prefs:
     thumb_size: str = "M"         # S | M | L
     seen_welcome: bool = False
     face_crop: bool = False
+    diversify: bool = True        # per-image appearance variation + uniqueness
     extra: dict = field(default_factory=dict)
 
 
