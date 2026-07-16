@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .models import PromptOptions
+from .models import CaptureModality, PromptOptions
 from .sizes import A4_PORTRAIT_ASPECT, parse_size
 
 # Hard requirements are always present, verbatim, in the order below.
@@ -262,7 +262,15 @@ def _as_requirement(text: str) -> str:
 
 
 def build_prompt(options: PromptOptions) -> str:
-    """Render the full prompt text for one portrait."""
+    """Render the full prompt text for one image.
+
+    Dispatches on the capture modality. RGB_FACE (the default) renders the
+    passport/studio face portrait below, unchanged; other modalities delegate to
+    their own builder. Add a branch here when a new modality is introduced.
+    """
+    if options.modality == CaptureModality.IR_IRIS:
+        return _build_iris_prompt(options)
+
     lines: list[str] = []
     lines.append(
         "Generate a photorealistic portrait of one synthetic human person who does not exist."
@@ -334,6 +342,210 @@ def build_prompt(options: PromptOptions) -> str:
     negatives = list(NEGATIVE_CONSTRAINTS)
     if options.face_crop:
         negatives.extend(FACE_PORTRAIT_NEGATIVES)
+    for extra in options.extra_negative_constraints:
+        if extra.strip():
+            negatives.append(extra.strip())
+    lines.append("Do not include:")
+    for neg in negatives:
+        lines.append(f"- {neg}")
+
+    return "\n".join(lines).strip()
+
+
+# --------------------------------------------------------------------------- #
+# IR_IRIS modality — monochrome near-infrared iris capture
+# --------------------------------------------------------------------------- #
+# The face invariants above do not apply to an iris capture (there is no head,
+# framing, background or expression to constrain), so this modality carries its
+# own hard requirements and negatives rather than reusing the portrait ones.
+# Structural invariants — always true, regardless of any realism knob.
+IRIS_INVARIANTS: list[str] = [
+    "The image is a single monochrome (8-bit grayscale) frame — one luminance "
+    "channel, absolutely no colour, no colour tint, no sepia or blue cast.",
+    "It is a plain, sharp photograph framed tightly on exactly ONE human eye and the "
+    "skin immediately around it, lit by near-infrared (~850 nm) light — the kind of "
+    "frame a near-infrared eye camera records.",
+    "Landscape framing with the iris centred and sitting well inside the frame (clear "
+    "margin on every side, more to the left and right than above and below); the iris "
+    "is never clipped by the image edge.",
+    "The iris diameter spans roughly 40-55% of the image height: a moderate close-up, "
+    "not an extreme macro.",
+    "Correct near-infrared tones: a deep-black round pupil at the centre; a bright, "
+    "smooth light-grey sclera; and, between them, a mid-grey richly textured iris ring.",
+    "Even a heavily pigmented (dark-brown) iris must appear MID-GREY and full of visible "
+    "texture — never a dark, flat or black featureless disc — because melanin is "
+    "transparent to near-infrared light, so the stroma shows through for every eye colour.",
+    "Anatomically correct, sharply resolved iris structure: an inner pupillary zone and "
+    "an outer ciliary zone divided by the collarette; radial furrows; concentric "
+    "contraction furrows; crypts near the collarette and periphery; fine trabecular "
+    "striations — the natural stroma is a dense, irregular texture.",
+    "Sharp focus on the iris; crisp fine detail; no motion blur, no depth-of-field blur, "
+    "no artistic bokeh.",
+]
+
+# Ideal-capture requirements — appended only for an image that does NOT carry the
+# matching non-ideal condition, so the prompt never contradicts itself.
+_IDEAL_GAZE = (
+    "The eye looks straight at the camera with a neutral, forward gaze; the iris is a "
+    "full, front-on circle (not foreshortened)."
+)
+_IDEAL_EXPOSURE = (
+    "The eye is open wide with the iris fully exposed; eyelids and lashes frame the eye "
+    "but do not cover any part of the iris."
+)
+_IDEAL_SPECULAR = (
+    "Exactly one small, controlled specular reflection from the illuminator, on the pupil "
+    "or its edge — not lying over the iris and not washing out any texture."
+)
+# realism key -> the ideal requirement it suppresses.
+_IDEAL_BY_REALISM: dict[str, str] = {
+    "gaze": _IDEAL_GAZE,
+    "occlusion": _IDEAL_EXPOSURE,
+    "glasses": _IDEAL_SPECULAR,
+}
+
+# Negatives that always apply.
+IRIS_NEGATIVES_ALWAYS: list[str] = [
+    "Any text, letters, words, numbers, captions, labels, watermarks, logos, "
+    "timestamps or writing of any kind, anywhere in the image",
+    "Measurement scales, rulers, grids, reticles, crosshairs, corner brackets, "
+    "bounding boxes, arrows or annotation marks",
+    "Any user interface, HUD, on-screen display, device screen, dashboard, or "
+    "scanner overlay",
+    "Colour of any kind",
+    "Colour photograph, RGB image, colour tint, sepia, or blue cast",
+    "False-colour or thermal colour-mapping",
+    "More than one eye, both eyes, or any part of the face beyond the immediate eye "
+    "(no nose, mouth, or brow)",
+    "The iris rendered as a flat, dark, or black featureless disc with no visible texture",
+    "A glowing, neon, CGI, or galaxy/sci-fi stylized eye",
+    "Cartoon, illustration, painting, 3D render, or any non-photographic look",
+    "Blur, motion blur, an out-of-focus iris, or artistic background bokeh",
+]
+
+# Negatives dropped for an image that DELIBERATELY carries that condition (a realism
+# knob put it in); added back for every image that does not.
+_NEG_BY_REALISM: dict[str, str] = {
+    "lens": "Contact lenses of any kind (clear, coloured, cosmetic or costume) or contact-lens edge glare",
+    "glasses": "Glasses or spectacles, or any lens glare, reflection or refraction over the eye",
+    "makeup": "Eye makeup, eyeliner, mascara or eyeshadow",
+    "condition": "Visible eye disease, cloudiness, growths, redness, or pupil irregularity",
+}
+
+# Display order for the per-image "capture conditions" section.
+_REALISM_ORDER = ("gaze", "occlusion", "lens", "makeup", "glasses", "condition")
+
+_IRIS_VARIATION_GUIDANCE: dict[int, list[str]] = {
+    0: [
+        "Strict repeatability: standardized iris-camera setup — identical framing, "
+        "illuminator position and pupil size. Minimize variation.",
+    ],
+    1: [
+        "Low variation: keep the same framing and illumination.",
+        "Permit only very subtle differences in pupil size and iris texture.",
+    ],
+    2: [
+        "Moderate natural variation within a standardized iris-capture setup:",
+        "- subtle pupil-size variation",
+        "- natural variation in crypt and furrow detail",
+        "- slight variation in the illuminator highlight position",
+        "- small differences in eyelid openness and lash coverage",
+    ],
+    3: [
+        "High natural variation while strictly preserving every iris-capture rule above:",
+        "- noticeable pupil-size variation (still round and centred)",
+        "- varied, realistic crypt/furrow/collarette detail",
+        "- varied illuminator highlight position",
+        "- varied eyelid openness and lash coverage — the full iris stays unclipped",
+        "- keep the eye front-facing and the iris sharply in focus",
+    ],
+}
+
+
+def iris_variation_guidance(level: int) -> list[str]:
+    """Return the permitted-variation lines for an IR iris capture (level 0–3)."""
+    level = max(0, min(3, int(level)))
+    return list(_IRIS_VARIATION_GUIDANCE[level])
+
+
+def _build_iris_prompt(options: PromptOptions) -> str:
+    """Render the prompt for one monochrome near-infrared iris capture."""
+    lines: list[str] = []
+    lines.append(
+        "Generate a single monochrome (grayscale) near-infrared photograph of one human "
+        "eye belonging to a synthetic person who does not exist."
+    )
+    lines.append("")
+    lines.append(
+        "It must look exactly like a real frame from a near-infrared iris camera under "
+        "~850 nm illumination: a plain, sharp, completely colourless close-up of just one "
+        "eye. It is a photograph — NOT a colour image, NOT a stylized or CGI render, NOT a "
+        "screen or device readout — and it contains NO text or graphics of any kind."
+    )
+    lines.append("")
+
+    # Non-ideal conditions this specific image carries (empty = pristine capture).
+    realism = options.iris.active_realism() if options.iris is not None else {}
+
+    # Hard requirements: invariants + the ideal-capture rules NOT overridden by a
+    # condition on this image.
+    lines.append("Hard requirements:")
+    for req in IRIS_INVARIANTS:
+        lines.append(f"- {req}")
+    for key, ideal in _IDEAL_BY_REALISM.items():
+        if key not in realism:
+            lines.append(f"- {ideal}")
+    for extra in options.extra_positive_constraints:
+        if extra.strip():
+            lines.append(f"- {extra.strip()}")
+    lines.append("")
+
+    # Demographic target — the SAME three axes as the face modality. Iris structure
+    # tracks ancestry; pupil size and corneal arcus track age. In near-infrared the
+    # tone is mid-grey regardless of visible eye colour (melanin is NIR-transparent).
+    lines.append(
+        "Demographic target (match the iris structure and proportions typical of this "
+        "person; the near-infrared tone stays mid-grey regardless of eye colour):"
+    )
+    lines.append(f"- Age: {options.age_bucket}")
+    lines.append(f"- Gender presentation: {options.gender_bucket}")
+    lines.append(f"- Apparent ancestry: {options.ethnicity_bucket}")
+    lines.append("")
+
+    # Distinct iris — the per-image diversity layer (mirrors the face path).
+    if options.iris is not None:
+        lines.append(
+            "Distinct iris — render ONE specific, unique iris with exactly these "
+            "features (do not blend toward a generic average iris):"
+        )
+        for line in options.iris.to_prompt_lines():
+            lines.append(f"- {line}")
+        lines.append("")
+
+    # Non-ideal capture conditions for THIS image — only present when a realism knob
+    # was enabled AND sampled in. These deliberately override the ideal rules above.
+    if realism:
+        lines.append(
+            "Capture conditions for THIS image (render these exactly; where they "
+            "conflict with the ideal-capture rules above, THESE take priority):"
+        )
+        for key in _REALISM_ORDER:
+            if key in realism:
+                lines.append(f"- {realism[key]}")
+        lines.append("")
+
+    lines.append(f"Permitted natural variation (variation level {options.variation_level}):")
+    for g in iris_variation_guidance(options.variation_level):
+        lines.append(g if g.startswith("-") else f"- {g}")
+    if options.seed is not None:
+        lines.append(f"- Deterministic seed in effect: {options.seed}.")
+    lines.append("")
+
+    # Negatives: the always-on set, plus a ban on anything this image does NOT carry.
+    negatives = list(IRIS_NEGATIVES_ALWAYS)
+    for key, neg in _NEG_BY_REALISM.items():
+        if key not in realism:
+            negatives.append(neg)
     for extra in options.extra_negative_constraints:
         if extra.strip():
             negatives.append(extra.strip())

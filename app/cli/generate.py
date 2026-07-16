@@ -21,8 +21,10 @@ from typing import Optional, Sequence
 from ..core.buckets import BucketValidationError
 from ..core.config import AppConfig
 from ..core.generator import Generator, RunNotConfirmedError
+from ..core.iris import IrisRealismOptions
 from ..core.models import (
     BatchGenerationRequest,
+    CaptureModality,
     DistributionMode,
     EventType,
     GenerationEvent,
@@ -55,6 +57,42 @@ def _build_parser(cfg: AppConfig) -> argparse.ArgumentParser:
         "--model",
         default=cfg.settings.default_model,
         help="Model id within the provider (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--modality",
+        choices=[m.value for m in CaptureModality],
+        default=CaptureModality.RGB_FACE.value,
+        help="Imaging modality: 'rgb' (colour face portrait) or 'ir' "
+        "(monochrome near-infrared iris capture). Default: %(default)s.",
+    )
+    iris_group = parser.add_argument_group(
+        "IR iris realism (opt-in; only affects --modality ir)",
+        "Each flag mixes a non-ideal capture condition into a realistic fraction "
+        "of the batch (with per-image variety). Off by default.",
+    )
+    iris_group.add_argument(
+        "--ir-occlusion", action="store_true",
+        help="Drooping eyelids / eyelashes occluding the iris.",
+    )
+    iris_group.add_argument(
+        "--ir-off-gaze", action="store_true",
+        help="Slight off-axis gaze (iris a mild ellipse); stays readable.",
+    )
+    iris_group.add_argument(
+        "--ir-lenses", action="store_true",
+        help="Contact lenses (soft / hard / cosmetic / painted).",
+    )
+    iris_group.add_argument(
+        "--ir-conditions", action="store_true",
+        help="Minor eye / iris / sclera conditions (arcus, pterygium, cataract, ...).",
+    )
+    iris_group.add_argument(
+        "--ir-glasses", action="store_true",
+        help="Spectacles with heavy glare / distortion over the eye.",
+    )
+    iris_group.add_argument(
+        "--ir-makeup", action="store_true",
+        help="Moderate to strong eye makeup around the eye.",
     )
     parser.add_argument("--count", type=int, help="Total number of images to generate.")
     parser.add_argument(
@@ -229,9 +267,19 @@ def _build_request(args: argparse.Namespace, cfg: AppConfig) -> BatchGenerationR
     if not (20 <= head_height_pct <= 90):
         raise ValueError("--head-height-pct must be between 20 and 90.")
 
+    iris_realism = IrisRealismOptions(
+        eyelid_occlusion=args.ir_occlusion,
+        off_gaze=args.ir_off_gaze,
+        contact_lenses=args.ir_lenses,
+        ocular_conditions=args.ir_conditions,
+        glasses=args.ir_glasses,
+        eye_makeup=args.ir_makeup,
+    )
     return BatchGenerationRequest(
         provider=args.provider,
         model_id=args.model,
+        modality=CaptureModality(args.modality),
+        iris_realism=iris_realism,
         age_buckets=age,
         gender_buckets=gender,
         ethnicity_buckets=ethnicity,
@@ -285,10 +333,14 @@ def _print_confirmation(run: Run) -> None:
     pct = run.request.head_height_pct
     print(f"Provider: {run.request.provider}")
     print(f"Model: {run.model_info.display_name}")
+    print(f"Modality: {run.request.modality.value}")
     print(f"Images: {run.total}")
     print(f"Size: {run.request.size}")
     print(f"Quality: {run.request.quality}")
-    print(f"Framing: {framing_label(pct)} (head ~{pct}% of image height)")
+    if run.request.modality == CaptureModality.IR_IRIS:
+        print("Framing: near-infrared iris capture (4:3 landscape)")
+    else:
+        print(f"Framing: {framing_label(pct)} (head ~{pct}% of image height)")
     print(f"Estimated price per image: {per_image}")
     print(f"Estimated total cost: {est.human_summary()}")
     print("  (estimate is for planned outputs; retried/failed attempts are billed too)")

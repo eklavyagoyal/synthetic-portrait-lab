@@ -17,11 +17,29 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .appearance import Appearance
+from .iris import IrisAppearance, IrisRealismOptions
 
 
 # --------------------------------------------------------------------------- #
 # Enums
 # --------------------------------------------------------------------------- #
+class CaptureModality(str, Enum):
+    """The imaging modality a run generates.
+
+    This is an open axis, not a boolean: each member bundles a distinct subject,
+    prompt scaffold, per-image diversity sampler and output post-processing.
+    ``RGB_FACE`` is the historical default and its behaviour is unchanged.
+
+    To add a new modality later (e.g. a thermal capture) add a member here and a
+    matching branch in ``prompt_builder``, ``batch_planner`` and the generator's
+    post-processing — no front-end plumbing changes are required beyond a choice.
+    """
+
+    RGB_FACE = "rgb"   # photorealistic colour face portrait (default)
+    IR_IRIS = "ir"     # monochrome near-infrared iris capture
+    # THERMAL_* = "thermal"  # reserved — not implemented
+
+
 class DistributionMode(str, Enum):
     """How a total image count is spread across the selected demographic buckets."""
 
@@ -72,6 +90,8 @@ class PromptOptions(BaseModel):
     age_bucket: str
     gender_bucket: str
     ethnicity_bucket: str
+    # Imaging modality — selects the prompt scaffold + per-image descriptor.
+    modality: CaptureModality = CaptureModality.RGB_FACE
     variation_level: int = Field(0, ge=0, le=3)
     # Framing: head height (top of hair to chin) as a share of the image height.
     head_height_pct: int = Field(60, ge=20, le=90)
@@ -85,10 +105,24 @@ class PromptOptions(BaseModel):
     extra_negative_constraints: list[str] = Field(default_factory=list)
     face_crop: bool = False
     seed: Optional[int] = None
-    # Per-image, sampled physical individual. When present the prompt describes a
-    # specific, unrepeatable person; when None the prompt stays demographic-only
-    # (legacy behaviour). Set by the planner when diversification is enabled.
+    # Per-image, sampled descriptor. Exactly one of these is set (or neither,
+    # when diversification is off): ``appearance`` for RGB_FACE, ``iris`` for
+    # IR_IRIS. Kept as separate typed fields rather than a union so each
+    # modality's model stays independent and the RGB path is untouched.
     appearance: Optional[Appearance] = None
+    iris: Optional[IrisAppearance] = None
+
+    @property
+    def descriptor(self) -> Optional[Appearance | IrisAppearance]:
+        """The active per-image descriptor for this modality, if any.
+
+        Both concrete types expose ``exact_age`` / ``signature()`` /
+        ``to_prompt_lines()`` / ``model_dump()``, so callers can treat the
+        result uniformly without knowing the modality.
+        """
+        if self.modality == CaptureModality.IR_IRIS:
+            return self.iris
+        return self.appearance
 
 
 class ModelInfo(BaseModel):
@@ -144,6 +178,12 @@ class BatchGenerationRequest(BaseModel):
 
     provider: str
     model_id: str
+
+    # Imaging modality (RGB face portrait by default; IR iris capture; extensible).
+    modality: CaptureModality = CaptureModality.RGB_FACE
+    # Optional non-ideal capture conditions for the IR iris modality (all off by
+    # default; opt-in per run). Ignored by other modalities.
+    iris_realism: IrisRealismOptions = Field(default_factory=IrisRealismOptions)
 
     # Demographic selection
     age_buckets: list[str] = Field(default_factory=list)
@@ -273,6 +313,7 @@ class GenerationResult(BaseModel):
     filename: Optional[str] = None
     provider: str
     model: str
+    modality: str = CaptureModality.RGB_FACE.value  # "rgb" | "ir" (self-describing dataset)
     prompt: str = ""
     age_bucket: str
     gender_bucket: str
@@ -302,6 +343,7 @@ class GenerationResult(BaseModel):
         rec["filename"] = self.filename
         rec["provider"] = self.provider
         rec["model"] = self.model
+        rec["modality"] = self.modality
         rec["age_bucket"] = self.age_bucket
         rec["gender_bucket"] = self.gender_bucket
         rec["ethnicity_bucket"] = self.ethnicity_bucket
@@ -503,6 +545,7 @@ class Run(BaseModel):
             "model": self.model_info.model_id,
             "model_display_name": self.model_info.display_name,
             "endpoint": self.api_endpoint,
+            "modality": self.request.modality.value,
             "size": self.request.size,
             "quality": self.request.quality,
             "variation_level": self.request.variation_level,

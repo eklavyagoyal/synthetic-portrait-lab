@@ -35,6 +35,18 @@ _A4_PORTRAIT_CANDIDATES = (
     "1152x1632",
 )
 
+# Near-infrared iris captures follow ISO/IEC 19794-6: a 4:3 landscape frame (the
+# standard array is 640x480, 8-bit grayscale, iris diameter ~200 px with clear
+# margins). gpt-image can't emit 640x480 (below its minimum-pixel floor), so we
+# generate at a higher-resolution 4:3 size the model accepts and keep the standard
+# aspect ratio and framing.
+IRIS_CAPTURE_ASPECT = 4 / 3
+_IRIS_CAPTURE_CANDIDATES = (
+    "2048x1536",  # ~3.1 MP, high-res 4:3 (iris well above the 200 px recommendation)
+    "1536x1152",
+    "1024x768",
+)
+
 
 def parse_size(size: str) -> Optional[tuple[int, int]]:
     """Parse ``"WIDTHxHEIGHT"`` into ``(width, height)``; ``None`` if malformed."""
@@ -90,6 +102,17 @@ def _aspect_delta(size: str, target_aspect: float) -> float:
     return abs((width / height) - target_aspect)
 
 
+def _aspect_delta_landscape(size: str, target_aspect: float) -> float:
+    """Like :func:`_aspect_delta` but for landscape (width > height) sizes."""
+    parsed = parse_size(size)
+    if parsed is None:
+        return float("inf")
+    width, height = parsed
+    if width <= height:
+        return float("inf")
+    return abs((width / height) - target_aspect)
+
+
 def resolve_a4_portrait_size(provider: str, model_id: str, model_info: ModelInfo) -> str:
     """Pick the best portrait size for A4-ratio face portraits on this model."""
     if accepts_custom_sizes(provider, model_id):
@@ -106,6 +129,29 @@ def resolve_a4_portrait_size(provider: str, model_id: str, model_info: ModelInfo
     if not portrait_presets:
         return model_info.default_size
     return min(portrait_presets, key=lambda s: _aspect_delta(s, A4_PORTRAIT_ASPECT))
+
+
+def resolve_iris_capture_size(provider: str, model_id: str, model_info: ModelInfo) -> str:
+    """Pick the best 4:3 landscape size for a near-infrared iris capture on this model.
+
+    Prefers a high-resolution custom 4:3 size on models that accept custom sizes
+    (gpt-image-2); otherwise the closest 4:3 landscape preset; otherwise the
+    model's default. See ISO/IEC 19794-6 for the standard 640x480 iris frame.
+    """
+    if accepts_custom_sizes(provider, model_id):
+        for candidate in _IRIS_CAPTURE_CANDIDATES:
+            parsed = parse_size(candidate)
+            if parsed and gpt_image_2_size_error(*parsed) is None:
+                return candidate
+
+    landscape_presets = [
+        s
+        for s in model_info.supports_size
+        if (parsed := parse_size(s)) and parsed[0] > parsed[1]
+    ]
+    if not landscape_presets:
+        return model_info.default_size
+    return min(landscape_presets, key=lambda s: _aspect_delta_landscape(s, IRIS_CAPTURE_ASPECT))
 
 
 def validate_request_size(size: str, model_info: ModelInfo) -> None:

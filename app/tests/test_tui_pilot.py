@@ -103,6 +103,45 @@ async def test_empty_dimension_blocks_expose(app):
         assert "ethnicity" in why
 
 
+async def test_modality_ir_swaps_face_controls_for_iris_realism(app):
+    from textual.widgets import Select, Switch
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause(0.4)
+        studio = _studio(app)
+
+        # RGB (default): face-portrait controls visible; iris realism hidden.
+        for sel in ("#framing", "#face-crop-row", "#portrait-style-fields", "#size"):
+            assert studio.query_one(sel).display, sel
+        assert not studio.query_one("#iris-realism-fields").display
+
+        # Switch to IR — face-only controls disappear (a 75% head makes no sense),
+        # and the iris realism knobs appear.
+        studio.query_one("#modality", Select).value = "ir"
+        await pilot.pause(0.3)
+        for sel in ("#framing", "#framing-label", "#face-crop-row",
+                    "#portrait-style-fields", "#size", "#size-label"):
+            assert not studio.query_one(sel).display, sel
+        assert studio.query_one("#iris-realism-fields").display
+
+        # Plan preview stops claiming a head height; the draft drops face-crop.
+        headline = str(studio.query_one("#plan-headline").render())
+        assert "iris capture" in headline
+        draft = studio._draft_request()
+        assert draft.modality.value == "ir" and draft.face_crop is False
+
+        # A realism knob flows into the request (opt-in per run).
+        studio.query_one("#ir-lenses-switch", Switch).value = True
+        await pilot.pause(0.2)
+        assert studio._draft_request().iris_realism.contact_lenses is True
+
+        # Back to RGB: face controls return, iris realism hides again.
+        studio.query_one("#modality", Select).value = "rgb"
+        await pilot.pause(0.3)
+        assert studio.query_one("#framing").display
+        assert not studio.query_one("#iris-realism-fields").display
+
+
 async def test_prompt_peek_and_model_picker_modals(app):
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause(0.4)

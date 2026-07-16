@@ -42,6 +42,14 @@ class Prefs:
     seen_welcome: bool = False
     face_crop: bool = False
     diversify: bool = True        # per-image appearance variation + uniqueness
+    modality: str = "rgb"         # "rgb" (face) | "ir" (near-infrared iris)
+    # IR iris realism knobs (opt-in; only used when modality == "ir")
+    ir_occlusion: bool = False
+    ir_off_gaze: bool = False
+    ir_lenses: bool = False
+    ir_conditions: bool = False
+    ir_glasses: bool = False
+    ir_makeup: bool = False
     extra: dict = field(default_factory=dict)
 
 
@@ -74,6 +82,8 @@ def load(path: Optional[Path] = None) -> Prefs:
         prefs.distribution = "even"
     if prefs.quality not in ("low", "medium", "high", "auto"):
         prefs.quality = "medium"
+    if prefs.modality not in ("rgb", "ir"):
+        prefs.modality = "rgb"
     return prefs
 
 

@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from functools import partial
 from itertools import product
-from typing import Optional
+from typing import Callable, Optional
 
 from .appearance import Appearance, sample_appearance
+from .iris import IrisAppearance, sample_iris_appearance
 from .models import (
     BatchGenerationRequest,
+    CaptureModality,
     DistributionMode,
     PlannedItem,
     PromptOptions,
@@ -37,22 +40,25 @@ Triple = tuple[str, str, str]  # (age, gender, ethnicity)
 _MAX_APPEARANCE_TRIES = 5000
 
 
-def _unique_appearance(
+def _unique_descriptor(
     rng: random.Random,
     *,
+    sample_fn: Callable[..., Appearance | IrisAppearance],
     age: str,
     gender: str,
     ethnicity: str,
     seen: set[str],
-) -> Appearance:
-    """Sample an appearance whose signature is not already in ``seen``.
+) -> Appearance | IrisAppearance:
+    """Sample a per-image descriptor whose signature is not already in ``seen``.
 
-    Each redraw advances ``rng``, so candidates differ; the accepted signature is
-    added to ``seen`` so later items (and the cross-run registry) stay distinct.
+    ``sample_fn`` is the modality's sampler (face or iris); both share one
+    signature and expose ``.signature()``. Each redraw advances ``rng``, so
+    candidates differ; the accepted signature is added to ``seen`` so later items
+    (and the cross-run registry) stay distinct.
     """
-    last: Optional[Appearance] = None
+    last: Optional[Appearance | IrisAppearance] = None
     for _ in range(_MAX_APPEARANCE_TRIES):
-        cand = sample_appearance(
+        cand = sample_fn(
             rng, age_bucket=age, gender_bucket=gender, ethnicity_bucket=ethnicity
         )
         last = cand
@@ -193,27 +199,40 @@ def plan_batch(
     else:  # pragma: no cover - exhaustive
         raise PlanningError(f"Unknown distribution mode: {req.distribution_mode}")
 
+    # Each sampler shares the signature (rng, *, age_bucket, gender_bucket,
+    # ethnicity_bucket) and returns an object with .signature(), so the
+    # rejection-dedup loop treats modalities uniformly. The iris sampler also
+    # takes the run's opt-in realism options, bound here.
+    is_iris = req.modality == CaptureModality.IR_IRIS
+    sample_fn = (
+        partial(sample_iris_appearance, realism=req.iris_realism)
+        if is_iris
+        else sample_appearance
+    )
+
     items: list[PlannedItem] = []
     for index, (age, gender, ethnicity) in enumerate(triples):
         item_seed = None if req.seed is None else req.seed + index
         item_id = f"{req.filename_prefix}_{index + 1:06d}"
 
-        appearance: Optional[Appearance] = None
+        descriptor: Optional[Appearance | IrisAppearance] = None
         if req.diversify:
             # A per-item RNG keyed by (base seed, index) keeps plans reproducible
-            # while making each item's appearance independent. With no base seed
+            # while making each item's descriptor independent. With no base seed
             # we still vary by index; the cross-run registry (seen_signatures)
             # diverges otherwise-identical seedless reruns via rejection sampling.
             base = req.seed if req.seed is not None else 0
             item_rng = random.Random((base + 1) * 2654435761 ^ (index * 40503 + 17))
-            appearance = _unique_appearance(
-                item_rng, age=age, gender=gender, ethnicity=ethnicity, seen=seen
+            descriptor = _unique_descriptor(
+                item_rng, sample_fn=sample_fn, age=age, gender=gender,
+                ethnicity=ethnicity, seen=seen,
             )
 
         options = PromptOptions(
             age_bucket=age,
             gender_bucket=gender,
             ethnicity_bucket=ethnicity,
+            modality=req.modality,
             variation_level=req.variation_level,
             head_height_pct=req.head_height_pct,
             size=req.size,
@@ -225,7 +244,8 @@ def plan_batch(
             extra_negative_constraints=list(req.extra_negative_constraints),
             face_crop=req.face_crop,
             seed=item_seed,
-            appearance=appearance,
+            appearance=None if is_iris else descriptor,
+            iris=descriptor if is_iris else None,
         )
         items.append(
             PlannedItem(

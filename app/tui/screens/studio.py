@@ -38,8 +38,15 @@ from textual.widgets import (
 )
 
 from app.core.batch_planner import plan_batch
-from app.core.models import BatchGenerationRequest, DistributionMode, PlannedItem
+from app.core.iris import IrisRealismOptions
+from app.core.models import (
+    BatchGenerationRequest,
+    CaptureModality,
+    DistributionMode,
+    PlannedItem,
+)
 from app.core.prompt_builder import framing_label
+from app.core.sizes import resolve_iris_capture_size
 
 from .. import glyphs, labels, prefs
 from ..widgets import BucketList, DistBars, Hero, MoneyBlock
@@ -77,6 +84,13 @@ _DISTRIBUTION_CHOICES = [
     (DistributionMode.RANDOM.value, DistributionMode.RANDOM.value),
     (DistributionMode.WEIGHTED.value, DistributionMode.WEIGHTED.value),
 ]
+
+# Imaging modality — an open list (thermal etc. can be appended later), not a toggle.
+_MODALITY_CHOICES = [
+    ("RGB · colour face portrait", CaptureModality.RGB_FACE.value),
+    ("IR · near-infrared iris (grayscale)", CaptureModality.IR_IRIS.value),
+]
+_MODALITY_VALUES = {value for _, value in _MODALITY_CHOICES}
 
 
 @dataclass
@@ -194,6 +208,8 @@ class StudioScreen(Screen):
 
         #advanced-box Input { margin: 0 0 1 0; }
         #advanced-box TextArea { height: 4; margin: 0 0 1 0; }
+        #portrait-style-fields { height: auto; }
+        #iris-realism-fields { height: auto; }
 
         #prompt-sample-card { max-height: 14; }
         #prompt-sample { color: $text-muted; height: auto; }
@@ -276,7 +292,14 @@ class StudioScreen(Screen):
                 with Vertical(classes="card", id="model-card-box") as card:
                     card.border_title = "model"
                     yield ModelCard(id="model-display")
-                    yield Label("size", classes="field-label")
+                    yield Label("modality", classes="field-label")
+                    yield Select(
+                        _MODALITY_CHOICES,
+                        value=p.modality if p.modality in _MODALITY_VALUES else "rgb",
+                        allow_blank=False,
+                        id="modality",
+                    )
+                    yield Label("size", classes="field-label", id="size-label")
                     yield Select(
                         [("1024x1024", "1024x1024")],
                         value="1024x1024",
@@ -290,7 +313,11 @@ class StudioScreen(Screen):
                         allow_blank=False,
                         id="quality",
                     )
-                    yield Label("framing · head height (hair→chin)", classes="field-label")
+                    yield Label(
+                        "framing · head height (hair→chin)",
+                        classes="field-label",
+                        id="framing-label",
+                    )
                     yield Select(
                         _FRAMING_CHOICES,
                         value=p.head_height_pct if p.head_height_pct in _FRAMING_VALUES else 60,
@@ -359,25 +386,49 @@ class StudioScreen(Screen):
                         with Horizontal(classes="switch-row"):
                             yield Switch(value=p.diversify, id="diversify-switch")
                             yield Label("diversify (unique appearance per image — prevents look-alikes)")
-                        with Horizontal(classes="switch-row"):
+                        with Horizontal(classes="switch-row", id="face-crop-row"):
                             yield Switch(value=p.face_crop, id="face-crop-switch")
                             yield Label("A4 face portrait (prompt-only — head only, no clipping)")
-                        yield Label("background", classes="field-label")
-                        yield Input(
-                            value="plain light gray or off-white background", id="opt-background"
-                        )
-                        yield Label("expression", classes="field-label")
-                        yield Input(value="neutral, natural facial expression", id="opt-expression")
-                        yield Label("lighting", classes="field-label")
-                        yield Input(value="natural studio lighting", id="opt-lighting")
-                        yield Label("image style", classes="field-label")
-                        yield Input(
-                            value="photorealistic passport-style studio portrait", id="opt-style"
-                        )
+                        with Vertical(id="portrait-style-fields"):
+                            yield Label("background", classes="field-label")
+                            yield Input(
+                                value="plain light gray or off-white background", id="opt-background"
+                            )
+                            yield Label("expression", classes="field-label")
+                            yield Input(value="neutral, natural facial expression", id="opt-expression")
+                            yield Label("lighting", classes="field-label")
+                            yield Input(value="natural studio lighting", id="opt-lighting")
+                            yield Label("image style", classes="field-label")
+                            yield Input(
+                                value="photorealistic passport-style studio portrait", id="opt-style"
+                            )
                         yield Label("extra positive constraints (one per line)", classes="field-label")
                         yield TextArea(id="opt-extra-pos")
                         yield Label("extra negative constraints (one per line)", classes="field-label")
                         yield TextArea(id="opt-extra-neg")
+                        with Vertical(id="iris-realism-fields"):
+                            yield Label(
+                                "IR iris realism (only for IR · mixes non-ideal captures into the batch)",
+                                classes="field-label",
+                            )
+                            with Horizontal(classes="switch-row"):
+                                yield Switch(value=p.ir_occlusion, id="ir-occlusion-switch")
+                                yield Label("eyelid / eyelash occlusion")
+                            with Horizontal(classes="switch-row"):
+                                yield Switch(value=p.ir_off_gaze, id="ir-off-gaze-switch")
+                                yield Label("slight off-gaze")
+                            with Horizontal(classes="switch-row"):
+                                yield Switch(value=p.ir_lenses, id="ir-lenses-switch")
+                                yield Label("contact lenses (soft/hard/cosmetic/painted)")
+                            with Horizontal(classes="switch-row"):
+                                yield Switch(value=p.ir_conditions, id="ir-conditions-switch")
+                                yield Label("minor eye conditions")
+                            with Horizontal(classes="switch-row"):
+                                yield Switch(value=p.ir_glasses, id="ir-glasses-switch")
+                                yield Label("glasses (heavy glare)")
+                            with Horizontal(classes="switch-row"):
+                                yield Switch(value=p.ir_makeup, id="ir-makeup-switch")
+                                yield Label("eye makeup (moderate/strong)")
                 with Vertical(classes="card", id="prompt-sample-card") as card:
                     card.border_title = "prompt sample"
                     card.border_subtitle = "ctrl+e full preview"
@@ -399,12 +450,39 @@ class StudioScreen(Screen):
 
         yield Footer()
 
+    # Controls that only make sense for the RGB face portrait; hidden for any
+    # other modality (an IR iris capture has no head, framing, size choice,
+    # background, expression or image-style to set).
+    _FACE_ONLY_SELECTORS = (
+        "#framing-label", "#framing",
+        "#size-label", "#size",
+        "#face-crop-row",
+        "#portrait-style-fields",
+    )
+    # Controls that only make sense for the IR iris modality.
+    _IRIS_ONLY_SELECTORS = ("#iris-realism-fields",)
+
     def on_mount(self) -> None:
         self.app.studio_screen = self
         self._apply_breakpoint(self.app.size.width)
         if self.query("#model-display"):
             self._sync_model_card()
+            self._apply_modality_fields()
             self._schedule_refresh()
+
+    def _apply_modality_fields(self) -> None:
+        """Show only the controls relevant to the selected imaging modality."""
+        if not self.query("#modality"):
+            return
+        modality = str(self.query_one("#modality", Select).value)
+        is_face = modality == CaptureModality.RGB_FACE.value
+        is_iris = modality == CaptureModality.IR_IRIS.value
+        for selector in self._FACE_ONLY_SELECTORS:
+            for widget in self.query(selector):
+                widget.display = is_face
+        for selector in self._IRIS_ONLY_SELECTORS:
+            for widget in self.query(selector):
+                widget.display = is_iris
 
     def on_resize(self, event: events.Resize) -> None:
         self._apply_breakpoint(event.size.width)
@@ -435,6 +513,8 @@ class StudioScreen(Screen):
                 pass
         if isinstance(event, Select.Changed) and event.select.id == "size":
             pass  # size has no downstream rebuild beyond the estimate
+        if isinstance(event, Select.Changed) and event.select.id == "modality":
+            self._apply_modality_fields()  # show/hide face-only controls
         self._schedule_refresh()
 
     def _schedule_refresh(self) -> None:
@@ -491,9 +571,31 @@ class StudioScreen(Screen):
         quality = str(quality_value) if quality_value != Select.NULL else "medium"
         framing_value = self.query_one("#framing", Select).value
         head_height_pct = int(framing_value) if framing_value != Select.NULL else 60
+        modality = CaptureModality(str(self.query_one("#modality", Select).value))
+        size = str(size_value) if size_value != Select.NULL else "1024x1024"
+        face_crop = self.query_one("#face-crop-switch", Switch).value
+        if modality == CaptureModality.IR_IRIS:
+            # An IR iris capture has no head/framing and uses a standardized 4:3
+            # canvas (resolve_iris_capture_size); face-crop is meaningless here.
+            face_crop = False
+            try:
+                model_info = self._config.pricing.get_model_info(provider, model_id)
+                size = resolve_iris_capture_size(provider, model_id, model_info)
+            except Exception:  # noqa: BLE001 - fall back to a valid 4:3 default
+                size = "1536x1152"
+        iris_realism = IrisRealismOptions(
+            eyelid_occlusion=self.query_one("#ir-occlusion-switch", Switch).value,
+            off_gaze=self.query_one("#ir-off-gaze-switch", Switch).value,
+            contact_lenses=self.query_one("#ir-lenses-switch", Switch).value,
+            ocular_conditions=self.query_one("#ir-conditions-switch", Switch).value,
+            glasses=self.query_one("#ir-glasses-switch", Switch).value,
+            eye_makeup=self.query_one("#ir-makeup-switch", Switch).value,
+        )
         return BatchGenerationRequest(
             provider=provider,
             model_id=model_id,
+            modality=modality,
+            iris_realism=iris_realism,
             age_buckets=ages,
             gender_buckets=genders,
             ethnicity_buckets=eths,
@@ -501,7 +603,7 @@ class StudioScreen(Screen):
             total_count=self._field_int("#batch-size", 0) or 0,
             weights=weights,
             variation_level=int(self.query_one("#variation", Select).value),
-            size=str(size_value) if size_value != Select.NULL else "1024x1024",
+            size=size,
             quality=quality,
             head_height_pct=head_height_pct,
             seed=self._field_int("#seed"),
@@ -517,7 +619,7 @@ class StudioScreen(Screen):
             extra_positive_constraints=self._extra_lines("#opt-extra-pos"),
             extra_negative_constraints=self._extra_lines("#opt-extra-neg"),
             save_prompt=self.query_one("#save-prompt-switch", Switch).value,
-            face_crop=self.query_one("#face-crop-switch", Switch).value,
+            face_crop=face_crop,
             diversify=self.query_one("#diversify-switch", Switch).value,
         )
 
@@ -704,11 +806,14 @@ class StudioScreen(Screen):
             if sampled
             else labels.badge("EXACT PLAN", "$success")
         )
+        if draft.modality == CaptureModality.IR_IRIS:
+            geom = "iris capture · 4:3 landscape"
+        else:
+            geom = f"{framing_label(draft.head_height_pct)} · head {draft.head_height_pct}%"
         headline.update(
             f"{badge}  [b]{len(plan)}[/b] imgs · {draft.distribution_mode.value}\n"
             f"[$text-muted]spread — age {asp} · gender {gsp} · ethnicity {esp}[/]\n"
-            f"[$text-muted]size {esc(draft.size)} · {esc(draft.quality)} · "
-            f"{framing_label(draft.head_height_pct)} · head {draft.head_height_pct}%[/]"
+            f"[$text-muted]size {esc(draft.size)} · {esc(draft.quality)} · {esc(geom)}[/]"
         )
 
         bars.update_from_counts(
@@ -938,3 +1043,12 @@ class StudioScreen(Screen):
         p.save_prompt = self.query_one("#save-prompt-switch", Switch).value
         p.face_crop = self.query_one("#face-crop-switch", Switch).value
         p.diversify = self.query_one("#diversify-switch", Switch).value
+        modality_value = self.query_one("#modality", Select).value
+        if modality_value != Select.NULL:
+            p.modality = str(modality_value)
+        p.ir_occlusion = self.query_one("#ir-occlusion-switch", Switch).value
+        p.ir_off_gaze = self.query_one("#ir-off-gaze-switch", Switch).value
+        p.ir_lenses = self.query_one("#ir-lenses-switch", Switch).value
+        p.ir_conditions = self.query_one("#ir-conditions-switch", Switch).value
+        p.ir_glasses = self.query_one("#ir-glasses-switch", Switch).value
+        p.ir_makeup = self.query_one("#ir-makeup-switch", Switch).value
