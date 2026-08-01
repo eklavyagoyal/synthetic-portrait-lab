@@ -41,6 +41,17 @@ class Prefs:
     thumb_size: str = "M"         # S | M | L
     seen_welcome: bool = False
     face_crop: bool = False
+    mask_print: bool = False
+    mask_width_mm: float = 187.0
+    mask_height_mm: float = 245.0
+    mask_eye_inner_gap_mm: float = 40.0
+    mask_eye_width_mm: float = 38.0
+    mask_eye_height_mm: float = 18.0
+    mask_eye_center_top_mm: float = 103.0
+    mask_nose_width_mm: float = 40.0
+    mask_nose_length_mm: float = 30.0
+    mask_overlap_mm: float = 1.5
+    mask_dpi: int = 300
     diversify: bool = True        # per-image appearance variation + uniqueness
     modality: str = "rgb"         # "rgb" (face) | "ir" (near-infrared iris)
     # IR iris realism knobs (opt-in; only used when modality == "ir")
@@ -67,7 +78,8 @@ def load(path: Optional[Path] = None) -> Prefs:
         if not hasattr(prefs, key):
             continue
         current = getattr(prefs, key)
-        if current is None or isinstance(value, type(current)) or key in (
+        numeric_compatible = isinstance(current, float) and isinstance(value, (int, float))
+        if current is None or isinstance(value, type(current)) or numeric_compatible or key in (
             "ages", "genders", "ethnicities",
         ):
             setattr(prefs, key, value)
@@ -78,6 +90,16 @@ def load(path: Optional[Path] = None) -> Prefs:
     prefs.head_height_pct = _clamp_int(prefs.head_height_pct, 20, 90, 60)
     prefs.concurrency = _clamp_int(prefs.concurrency, 1, 32, 2)
     prefs.max_retries = _clamp_int(prefs.max_retries, 0, 10, 3)
+    prefs.mask_width_mm = _clamp_float(prefs.mask_width_mm, 100.0, 300.0, 187.0)
+    prefs.mask_height_mm = _clamp_float(prefs.mask_height_mm, 150.0, 400.0, 245.0)
+    prefs.mask_eye_inner_gap_mm = _clamp_float(prefs.mask_eye_inner_gap_mm, 15.0, 100.0, 40.0)
+    prefs.mask_eye_width_mm = _clamp_float(prefs.mask_eye_width_mm, 15.0, 70.0, 38.0)
+    prefs.mask_eye_height_mm = _clamp_float(prefs.mask_eye_height_mm, 8.0, 40.0, 18.0)
+    prefs.mask_eye_center_top_mm = _clamp_float(prefs.mask_eye_center_top_mm, 40.0, 180.0, 103.0)
+    prefs.mask_nose_width_mm = _clamp_float(prefs.mask_nose_width_mm, 20.0, 80.0, 40.0)
+    prefs.mask_nose_length_mm = _clamp_float(prefs.mask_nose_length_mm, 15.0, 80.0, 30.0)
+    prefs.mask_overlap_mm = _clamp_float(prefs.mask_overlap_mm, 0.0, 5.0, 1.5)
+    prefs.mask_dpi = _clamp_int(prefs.mask_dpi, 150, 600, 300)
     if prefs.distribution not in ("even", "random", "weighted"):
         prefs.distribution = "even"
     if prefs.quality not in ("low", "medium", "high", "auto"):
@@ -114,6 +136,13 @@ def save(prefs: Prefs, path: Optional[Path] = None) -> bool:
 def _clamp_int(value: Any, lo: int, hi: int, default: int) -> int:
     try:
         return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_float(value: Any, lo: float, hi: float, default: float) -> float:
+    try:
+        return max(lo, min(hi, float(value)))
     except (TypeError, ValueError):
         return default
 

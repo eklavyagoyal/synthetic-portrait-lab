@@ -128,6 +128,12 @@ class ExposeModal(ModalScreen[bool]):
                 )
                 yield Static(self._buckets_line())
                 yield Static(self._plan_line())
+                if req.mask_print:
+                    yield Static(
+                        f"[$text-muted]3D mask[/]  {req.mask_print.width_mm:.1f} × "
+                        f"{req.mask_print.height_mm:.1f} mm · {req.mask_print.dpi} dpi · "
+                        "6 panels · landmarks-v2 · fail-closed local QC"
+                    )
                 yield Static(f"[$text-muted]output[/]   {esc(str(run.output_dir))}")
             yield Static(
                 "THIS RUN IS FREE" if self._free else "THIS RUN WILL SPEND",

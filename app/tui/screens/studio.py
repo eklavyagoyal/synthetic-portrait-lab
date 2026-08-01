@@ -43,6 +43,7 @@ from app.core.models import (
     BatchGenerationRequest,
     CaptureModality,
     DistributionMode,
+    MaskPrintOptions,
     PlannedItem,
 )
 from app.core.prompt_builder import framing_label
@@ -210,6 +211,39 @@ class StudioScreen(Screen):
         #advanced-box TextArea { height: 4; margin: 0 0 1 0; }
         #portrait-style-fields { height: auto; }
         #iris-realism-fields { height: auto; }
+        #mask-print-controls {
+            height: auto;
+            margin: 0 0 1 0;
+            border: tall $primary;
+            background: $surface;
+        }
+        #mask-print-fields { height: auto; padding: 0 1 1 1; }
+        #mask-seg-intro { height: auto; color: $text-muted; margin: 0 0 1 0; }
+        #mask-geometry-preview {
+            height: auto;
+            border: round $border-soft;
+            background: $panel;
+            padding: 1 1;
+            margin: 0 0 1 0;
+        }
+        #mask-pipeline {
+            height: auto;
+            color: $text-muted;
+            border-left: thick $secondary;
+            padding: 0 0 0 1;
+            margin: 0 0 1 0;
+        }
+        .mask-section-title {
+            height: 1;
+            color: $primary;
+            text-style: bold;
+            margin: 1 0 0 0;
+        }
+        .mask-measure-row { height: auto; }
+        .mask-field { width: 1fr; height: auto; margin: 0 1 0 0; }
+        .mask-field:last-child { margin: 0; }
+        .mask-field Label { height: auto; color: $text-muted; }
+        .mask-field Input { width: 1fr; margin: 0; }
 
         #prompt-sample-card { max-height: 14; }
         #prompt-sample { color: $text-muted; height: auto; }
@@ -374,6 +408,109 @@ class StudioScreen(Screen):
                     with Horizontal(classes="switch-row"):
                         yield Switch(value=p.save_prompt, id="save-prompt-switch")
                         yield Label("save prompt into metadata")
+                with Collapsible(
+                    title="3D MASK SEGMENTATION · measured shell → six print panels",
+                    id="mask-print-controls",
+                    collapsed=False,
+                ):
+                    with Vertical(id="mask-print-fields"):
+                        with Horizontal(classes="switch-row"):
+                            yield Switch(value=p.mask_print, id="mask-print-switch")
+                            yield Label("enable local 3D mask segmentation for every RGB portrait")
+                        yield Static(
+                            "Measured white-mask profile. The paid portrait is preserved; "
+                            "all segmentation, quality control and PDF/SVG export run locally.",
+                            id="mask-seg-intro",
+                        )
+                        yield Static("", id="mask-geometry-preview")
+                        yield Static(
+                            f"{glyphs.DIAMOND} portrait  {glyphs.ARROW}  five landmarks  "
+                            f"{glyphs.ARROW}  fail-closed geometry gate\n"
+                            f"{glyphs.DIAMOND_HOLLOW} six surface panels  {glyphs.ARROW}  "
+                            "2-page colour PDF + 3-page calibration PDF + SVG",
+                            id="mask-pipeline",
+                        )
+
+                        yield Static("SHELL SURFACE", classes="mask-section-title")
+                        with Horizontal(classes="mask-measure-row"):
+                            with Vertical(classes="mask-field"):
+                                yield Label("edge-to-edge width · mm")
+                                yield Input(
+                                    value=str(p.mask_width_mm), type="number",
+                                    validators=[Number(minimum=100, maximum=300)],
+                                    id="mask-width-mm",
+                                )
+                            with Vertical(classes="mask-field"):
+                                yield Label("top-to-bottom height · mm")
+                                yield Input(
+                                    value=str(p.mask_height_mm), type="number",
+                                    validators=[Number(minimum=150, maximum=400)],
+                                    id="mask-height-mm",
+                                )
+
+                        yield Static("EYE APERTURES", classes="mask-section-title")
+                        with Horizontal(classes="mask-measure-row"):
+                            with Vertical(classes="mask-field"):
+                                yield Label("inner-corner gap · mm")
+                                yield Input(
+                                    value=str(p.mask_eye_inner_gap_mm), type="number",
+                                    validators=[Number(minimum=15, maximum=100)],
+                                    id="mask-eye-gap-mm",
+                                )
+                            with Vertical(classes="mask-field"):
+                                yield Label("opening width · mm")
+                                yield Input(
+                                    value=str(p.mask_eye_width_mm), type="number",
+                                    validators=[Number(minimum=15, maximum=70)],
+                                    id="mask-eye-width-mm",
+                                )
+                        with Horizontal(classes="mask-measure-row"):
+                            with Vertical(classes="mask-field"):
+                                yield Label("opening height · mm")
+                                yield Input(
+                                    value=str(p.mask_eye_height_mm), type="number",
+                                    validators=[Number(minimum=8, maximum=40)],
+                                    id="mask-eye-height-mm",
+                                )
+                            with Vertical(classes="mask-field"):
+                                yield Label("centre from top · mm")
+                                yield Input(
+                                    value=str(p.mask_eye_center_top_mm), type="number",
+                                    validators=[Number(minimum=40, maximum=180)],
+                                    id="mask-eye-top-mm",
+                                )
+
+                        yield Static("NOSE PLANE + ASSEMBLY", classes="mask-section-title")
+                        with Horizontal(classes="mask-measure-row"):
+                            with Vertical(classes="mask-field"):
+                                yield Label("nose base width · mm")
+                                yield Input(
+                                    value=str(p.mask_nose_width_mm), type="number",
+                                    validators=[Number(minimum=20, maximum=80)],
+                                    id="mask-nose-width-mm",
+                                )
+                            with Vertical(classes="mask-field"):
+                                yield Label("nose plane length · mm")
+                                yield Input(
+                                    value=str(p.mask_nose_length_mm), type="number",
+                                    validators=[Number(minimum=15, maximum=80)],
+                                    id="mask-nose-length-mm",
+                                )
+                        with Horizontal(classes="mask-measure-row"):
+                            with Vertical(classes="mask-field"):
+                                yield Label("panel overlap · mm")
+                                yield Input(
+                                    value=str(p.mask_overlap_mm), type="number",
+                                    validators=[Number(minimum=0, maximum=5)],
+                                    id="mask-overlap-mm",
+                                )
+                            with Vertical(classes="mask-field"):
+                                yield Label("A4 raster resolution · dpi")
+                                yield Input(
+                                    value=str(p.mask_dpi), type="integer",
+                                    validators=[Integer(minimum=150, maximum=600)],
+                                    id="mask-dpi",
+                                )
 
             with VerticalScroll(id="col-demo"):
                 yield BucketList("age", config.buckets.age, ages, id="age")
@@ -457,6 +594,7 @@ class StudioScreen(Screen):
         "#framing-label", "#framing",
         "#size-label", "#size",
         "#face-crop-row",
+        "#mask-print-controls",
         "#portrait-style-fields",
     )
     # Controls that only make sense for the IR iris modality.
@@ -550,6 +688,19 @@ class StudioScreen(Screen):
                 raise
             return default
 
+    def _field_float(
+        self, selector: str, default: Optional[float] = None, *, strict: bool = True
+    ) -> Optional[float]:
+        raw = self.query_one(selector, Input).value.strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            if strict:
+                raise
+            return default
+
     def _extra_lines(self, selector: str) -> list[str]:
         return [
             line.strip()
@@ -583,6 +734,37 @@ class StudioScreen(Screen):
                 size = resolve_iris_capture_size(provider, model_id, model_info)
             except Exception:  # noqa: BLE001 - fall back to a valid 4:3 default
                 size = "1536x1152"
+        mask_print = None
+        if (
+            modality == CaptureModality.RGB_FACE
+            and self.query_one("#mask-print-switch", Switch).value
+        ):
+            # Preserve explicit zero/negative input so Pydantic rejects it. Using
+            # ``value or default`` here would silently turn a dangerous physical
+            # measurement such as 0 mm back into the preset.
+            def mask_float(selector: str, default: float) -> float:
+                value = self._field_float(selector, default)
+                return default if value is None else value
+
+            def mask_int(selector: str, default: int) -> int:
+                value = self._field_int(selector, default)
+                return default if value is None else value
+
+            mask_print = MaskPrintOptions(
+                width_mm=mask_float("#mask-width-mm", 187.0),
+                height_mm=mask_float("#mask-height-mm", 245.0),
+                eye_inner_gap_mm=mask_float("#mask-eye-gap-mm", 40.0),
+                eye_opening_width_mm=mask_float("#mask-eye-width-mm", 38.0),
+                eye_opening_height_mm=mask_float("#mask-eye-height-mm", 18.0),
+                eye_center_from_top_mm=mask_float("#mask-eye-top-mm", 103.0),
+                nose_base_width_mm=mask_float("#mask-nose-width-mm", 40.0),
+                nose_length_mm=mask_float("#mask-nose-length-mm", 30.0),
+                overlap_mm=mask_float("#mask-overlap-mm", 1.5),
+                dpi=mask_int("#mask-dpi", 300),
+            )
+            # The face-only prompt gives the landmark gate the standardized
+            # single-head input it requires.
+            face_crop = True
         iris_realism = IrisRealismOptions(
             eyelid_occlusion=self.query_one("#ir-occlusion-switch", Switch).value,
             off_gaze=self.query_one("#ir-off-gaze-switch", Switch).value,
@@ -620,6 +802,7 @@ class StudioScreen(Screen):
             extra_negative_constraints=self._extra_lines("#opt-extra-neg"),
             save_prompt=self.query_one("#save-prompt-switch", Switch).value,
             face_crop=face_crop,
+            mask_print=mask_print,
             diversify=self.query_one("#diversify-switch", Switch).value,
         )
 
@@ -668,10 +851,56 @@ class StudioScreen(Screen):
         except (ValueError, TypeError) as exc:
             draft_error = str(exc) or "invalid settings"
 
+        self._refresh_mask_geometry(draft, draft_error)
         self._problems = self._compose_problems(draft_error)
         self._refresh_estimate(draft)
         self._refresh_plan_preview(draft)
         self._refresh_expose_button(draft)
+
+    def _refresh_mask_geometry(
+        self,
+        draft: Optional[BatchGenerationRequest],
+        draft_error: Optional[str],
+    ) -> None:
+        """Render the dedicated 3D-mask geometry/QC readout."""
+        if not self.query("#mask-geometry-preview"):
+            return
+        preview = self.query_one("#mask-geometry-preview", Static)
+        enabled = self.query_one("#mask-print-switch", Switch).value
+        if not enabled:
+            preview.border_title = "segmentation status"
+            preview.update(
+                f"{labels.badge('OFF', '$text-muted')}  portraits are saved without mask assets\n"
+                f"[$text-muted]Enable this category to add six physical panels, "
+                "calibration pages, cut lines and per-frame QC.[/]"
+            )
+            return
+
+        mask = draft.mask_print if draft is not None else None
+        if mask is None:
+            preview.border_title = "geometry needs attention"
+            preview.update(
+                f"{labels.badge('BLOCKED', '$error')}  "
+                f"{esc(draft_error or 'complete the mask measurements')}\n"
+                "[$text-muted]No generation can start with an invalid physical template.[/]"
+            )
+            return
+
+        preview.border_title = "measured white-mask profile"
+        preview.update(
+            f"{labels.badge('ACTIVE', '$tele-ok')}  "
+            f"{labels.badge('LOCAL $0', '$secondary')}  "
+            f"{labels.badge('FAIL-CLOSED QC', '$warning')}\n"
+            f"[b]surface[/]  {mask.width_mm:.1f} W × {mask.height_mm:.1f} H mm\n"
+            f"[b]eyes[/]     {mask.eye_inner_gap_mm:.1f} inner gap · "
+            f"{mask.eye_opening_width_mm:.1f}×{mask.eye_opening_height_mm:.1f} opening · "
+            f"y={mask.eye_center_from_top_mm:.1f}\n"
+            f"[b]nose[/]     {mask.nose_base_width_mm:.1f} base × "
+            f"{mask.nose_length_mm:.1f} plane mm\n"
+            f"[b]panels[/]   6 · {mask.overlap_mm:.1f} mm overlap · A4 @ {mask.dpi} dpi\n"
+            f"[$text-muted]QC: exactly one YuNet face · confidence ≥ 0.88 · "
+            "roll ≤ 8° · eye/nose/mouth geometry verified[/]"
+        )
 
     async def _maybe_rebuild_weights(self) -> None:
         collapsible = self.query_one("#weights-collapsible", Collapsible)
@@ -810,6 +1039,11 @@ class StudioScreen(Screen):
             geom = "iris capture · 4:3 landscape"
         else:
             geom = f"{framing_label(draft.head_height_pct)} · head {draft.head_height_pct}%"
+            if draft.mask_print:
+                geom += (
+                    f" · 3D mask {draft.mask_print.width_mm:.0f}×"
+                    f"{draft.mask_print.height_mm:.0f} mm + landmark QC"
+                )
         headline.update(
             f"{badge}  [b]{len(plan)}[/b] imgs · {draft.distribution_mode.value}\n"
             f"[$text-muted]spread — age {asp} · gender {gsp} · ethnicity {esp}[/]\n"
@@ -1042,6 +1276,37 @@ class StudioScreen(Screen):
         p.max_retries = self._field_int("#max-retries", p.max_retries, strict=False) or 0
         p.save_prompt = self.query_one("#save-prompt-switch", Switch).value
         p.face_crop = self.query_one("#face-crop-switch", Switch).value
+        p.mask_print = self.query_one("#mask-print-switch", Switch).value
+        p.mask_width_mm = self._field_float(
+            "#mask-width-mm", p.mask_width_mm, strict=False
+        ) or p.mask_width_mm
+        p.mask_height_mm = self._field_float(
+            "#mask-height-mm", p.mask_height_mm, strict=False
+        ) or p.mask_height_mm
+        p.mask_eye_inner_gap_mm = self._field_float(
+            "#mask-eye-gap-mm", p.mask_eye_inner_gap_mm, strict=False
+        ) or p.mask_eye_inner_gap_mm
+        p.mask_eye_width_mm = self._field_float(
+            "#mask-eye-width-mm", p.mask_eye_width_mm, strict=False
+        ) or p.mask_eye_width_mm
+        p.mask_eye_height_mm = self._field_float(
+            "#mask-eye-height-mm", p.mask_eye_height_mm, strict=False
+        ) or p.mask_eye_height_mm
+        p.mask_eye_center_top_mm = self._field_float(
+            "#mask-eye-top-mm", p.mask_eye_center_top_mm, strict=False
+        ) or p.mask_eye_center_top_mm
+        p.mask_nose_width_mm = self._field_float(
+            "#mask-nose-width-mm", p.mask_nose_width_mm, strict=False
+        ) or p.mask_nose_width_mm
+        p.mask_nose_length_mm = self._field_float(
+            "#mask-nose-length-mm", p.mask_nose_length_mm, strict=False
+        ) or p.mask_nose_length_mm
+        overlap_value = self._field_float(
+            "#mask-overlap-mm", p.mask_overlap_mm, strict=False
+        )
+        if overlap_value is not None:
+            p.mask_overlap_mm = overlap_value
+        p.mask_dpi = self._field_int("#mask-dpi", p.mask_dpi, strict=False) or p.mask_dpi
         p.diversify = self.query_one("#diversify-switch", Switch).value
         modality_value = self.query_one("#modality", Select).value
         if modality_value != Select.NULL:

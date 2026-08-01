@@ -416,11 +416,19 @@ class PortraitApp(App[None]):
                 )
             elif run is not None:
                 self.run_state = "done"
-                severity = "warning" if run.failure_count else "information"
+                mask_rejections = sum(
+                    1 for result in run.results if result.mask_print_error
+                )
+                severity = "warning" if (run.failure_count or mask_rejections) else "information"
+                mask_note = (
+                    f" · {mask_rejections} 3D mask segmentations rejected by QC"
+                    if mask_rejections
+                    else ""
+                )
                 self.notify(
                     f"{glyphs.DIAMOND} {run.success_count} developed, "
                     f"{run.failure_count} failed · {run.spend_summary()} · "
-                    f"{esc(run.output_dir.name)} — enter opens the contact sheet",
+                    f"{esc(run.output_dir.name)}{mask_note} — enter opens the contact sheet",
                     title="Run complete",
                     severity=severity,
                     timeout=6,
