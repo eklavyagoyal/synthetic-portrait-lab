@@ -26,6 +26,9 @@ output:    portrait_000001.png … + metadata.jsonl / .csv / manifest.json
 - Estimates cost before you spend, refuses to start until you confirm, and tracks live burn (every attempt, retries included) — never a fake "actual".
 - Tracks dataset coverage across age, gender, and ethnicity buckets as the batch fills in.
 - Surfaces failures in a triage table instead of burying them in logs — a bad item never crashes the batch.
+- Converts verified RGB portraits into measured six-panel 3D mask print packs,
+  with fail-closed landmark QC and physical calibration pages, directly from
+  the Studio TUI.
 - Writes every run to disk: `images/` plus `metadata.jsonl`, `metadata.csv`, and a `manifest.json`.
 
 ## Why this exists
@@ -67,7 +70,193 @@ python -m app.tui.main          # or the installed script: portrait-tui
 
 Press `ctrl+g` to expose (confirm) a batch. The mock model is free, so your first run costs nothing.
 
-### Real providers
+## 3D mask segmentation
+
+**3D mask segmentation** is a dedicated Studio category for transferring each
+generated RGB portrait onto the measured white face mask as six overlapping,
+printable surface panels. The original portrait stays unchanged and remains in
+`images/`; the mask pack is an additional deterministic local derivative. It
+does not make another GPT Image request, does not consume another generated
+image, and adds **$0 in provider cost**.
+
+The complete path is:
+
+```text
+generated RGB portrait
+  → local five-point face detection (both eyes + nose + mouth)
+  → fail-closed landmark and pose quality gate
+  → measured eye-to-mask registration
+  → 187 × 245 mm parametric mask surface
+  → six panels with 1.5 mm overlap
+  → colour PDF + calibration PDF + PNG pages + SVG + audit JSON
+```
+
+### Use it from the TUI
+
+The TUI is the primary workflow; the mask system is not a CLI-only add-on.
+
+1. Start the app with `python -m app.tui.main`.
+2. In **Studio**, keep the capture modality on an RGB face portrait. The mask
+   controls intentionally disappear for iris captures.
+3. Open the expanded **3D MASK SEGMENTATION · measured shell → six print
+   panels** category and enable its switch.
+4. Check the live geometry card. It must say **ACTIVE**, **LOCAL $0** and
+   **FAIL-CLOSED QC** and display the intended physical measurements.
+5. Choose the batch size and concurrency normally. Segmentation happens locally
+   after each individual portrait arrives and uses the same engine regardless
+   of whether the run was started from the TUI or CLI.
+6. Press `ctrl+g`. The confirmation screen repeats the mask size, DPI, six-panel
+   count, `landmarks-v2` template and local QC mode before the run begins.
+7. After generation, open the contact sheet. A successful frame says **3D mask
+   segmentation verified**. Press `p` to reveal its colour print PDF or `k` to
+   reveal its calibration PDF. A rejected frame shows the exact QC reason
+   instead of presenting an unsafe print as valid.
+
+The Studio persists the switch and measurements in the normal TUI preferences,
+but never stores API secrets. Invalid physical geometry blocks the expose button
+before a paid run can start.
+
+### Exact measured profile used here
+
+This repository's `landmarks-v2` preset is calibrated for the exact white mask
+shown in the project discussion. These values are the defaults in both the TUI
+and CLI:
+
+| Physical measurement | Exact value used | Meaning in the template |
+|---|---:|---|
+| Mask width | **187.0 mm** | edge-to-edge distance across the mask surface; intentionally slightly wider than the visible face |
+| Mask height | **245.0 mm** | top-to-bottom distance across the mask surface; intentionally slightly longer than the visible face |
+| Inner eye-corner gap | **40.0 mm** | distance between the two inner ends of the eye apertures, following the mask surface |
+| Eye opening width | **38.0 mm each** | inner-to-outer width of each printed eye cut-out |
+| Eye opening height | **18.0 mm each** | maximum vertical height of each printed eye cut-out |
+| Eye centre from top | **103.0 mm** | surface distance from the top edge to the horizontal eye centreline |
+| Nose base width | **40.0 mm** | width of the raised lower nose plane |
+| Nose plane length | **30.0 mm** | length following the raised nose plane, not its straight-line depth |
+| Panel overlap | **1.5 mm** | bleed around adjoining panels; the next panel covers the dashed guide |
+| Output stock | **A4 at 300 dpi** | PDFs must be printed at 100% / actual size |
+
+The word **surface** matters: 187 mm and 245 mm describe distances following
+the mask shell, not a flat front-view bounding box. This template approximates
+curvature through fitted, overlapping pieces. It is not a UV unwrap from a 3D
+scan, and it must not silently be reused for a differently shaped mask model.
+
+### Calibration pages
+
+The generated calibration PDF has three A4 pages. These are real pages from the
+verified `outputs/run_2026_07_31_1128` export, not illustrative mock-ups.
+
+**Page 1 — full measured outline, eye apertures, 10-mm grid and 100-mm printer
+control line:**
+
+![3D mask calibration overview](docs/images/3d-mask-calibration-01-overview.png)
+
+**Page 2 — forehead, left cheek and right cheek test panels:**
+
+![3D mask calibration panels: forehead and cheeks](docs/images/3d-mask-calibration-02-panels-a.png)
+
+**Page 3 — nose, mouth zone and chin test panels:**
+
+![3D mask calibration panels: nose, mouth and chin](docs/images/3d-mask-calibration-03-panels-b.png)
+
+Calibrate before spending ink on the colour faces:
+
+1. Print the calibration PDF on plain paper with **100%**, **Actual size** or
+   equivalent selected. Disable *Fit*, *Shrink oversized pages*, borderless
+   enlargement and any printer-driver scaling.
+2. Measure the control line on page 1 with a physical ruler. It must be exactly
+   **100.0 mm**. If it is not, fix the print settings first; editing the mask
+   dimensions would only hide a printer-scale error.
+3. Confirm the full outline measures 187 × 245 mm along the intended surface and
+   that both eye apertures align with the blank mask.
+4. Cut the grid panels from pages 2–3 and test-fit them in the numbered order.
+   Use removable tape at first. The 10-mm grid makes the direction and size of
+   any remaining correction measurable.
+5. Only after that dry fit succeeds should the corresponding colour PDF be
+   printed and attached for data collection.
+
+Guide legend:
+
+- **black outer line** — cut line; the thin boundary lies in the bleed and is
+  removed by a careful cut
+- **blue dashed line** — overlap registration line; cover it with the adjoining
+  piece so it is not visible on the assembled mask
+- **red eye outline on page 1** — aperture alignment/cut reference; **red vertical
+  line on panel grids** — shell centre reference, not an additional panel cut
+- **OBEN ^** — orientation marker; always points toward the forehead
+
+Recommended assembly order: **01 forehead → 02 left cheek → 03 right cheek →
+06 chin → 05 mouth zone → 04 nose**. The nose goes on last so its raised plane
+can cover the central cheek/mouth joins cleanly.
+
+### Alignment and fail-closed quality control
+
+The system never guesses the eyes from dark pixels, eyebrows, hair or shadows.
+It ships a checksum-verified local YuNet model and requires exactly one
+significant face. Before any printable asset is written it verifies, among other
+things:
+
+- detector confidence at least `0.88`; one face; plausible face-box size and
+  centring
+- usable eye spacing, eye line within the expected facial region and head roll
+  no greater than `8°`
+- nose between the eyes, mouth below the nose, plausible mouth width/tilt and
+  left/right yaw balance between `0.62` and `1.62`
+- a similarity transform anchored to both measured eye centres, followed by an
+  independent eye-registration check with at most `1.25 px` error
+- aligned nose and mouth positions that still fit the declared physical mask
+  geometry
+
+If any gate fails, `mask_print_error` records the reason and **no colour print
+PDF is emitted**. The paid portrait itself is preserved, so a rejected local
+derivative never destroys or conceals a successful provider output. Detector
+confidence, source/aligned landmarks, transform matrix, pose metrics and final
+registration error are recorded in each mask JSON for auditability.
+
+### Files produced for every verified portrait
+
+```text
+print/<portrait-id>/
+  <portrait-id>_mask_preview.png     # assembled seam preview; not for printing
+  <portrait-id>_print_page_1.png    # exact-DPI colour print page
+  <portrait-id>_print_page_2.png
+  <portrait-id>_print.pdf           # two-page A4 colour pack
+  <portrait-id>_calibration.pdf     # three-page A4 grid/calibration pack
+  <portrait-id>_cutlines.svg        # physical-size vector geometry
+  <portrait-id>_mask.json           # measurements, QC, transform and placements
+```
+
+The run-level `metadata.jsonl`, `metadata.csv` and `manifest.json` reference the
+derived assets and preserve any rejection reason. The source remains separately
+available as `images/<portrait-id>.png`, so both the generated portrait and its
+mask-ready version are always retained.
+
+### CLI and existing-image alternatives
+
+The equivalent scriptable batch command remains available. Concurrency controls
+provider requests; the local mask conversion follows each completed portrait:
+
+```bash
+python -m app.cli.generate \
+  --provider openai \
+  --model gpt-image-2 \
+  --count 8 \
+  --concurrency 4 \
+  --mask-print \
+  --yes
+```
+
+An existing portrait can be converted without calling any provider:
+
+```bash
+python -m app.cli.mask_print path/to/portrait.png --output path/to/print-pack
+```
+
+For another physical mask, change the measurements in the TUI and repeat the
+three-page calibration loop. For non-parametric or strongly different shells,
+add a scan-derived mesh/UV template instead of treating calibration as proof
+that the current shell geometry transfers universally.
+
+## Real providers
 
 Copy the example env file and fill in only the providers you'll use:
 
@@ -102,11 +291,20 @@ Everything you'd want to control on a run, and the flag that controls it:
 | Per-bucket weight | `--weight TOKEN=VALUE` | repeatable; used by `weighted` |
 | Variation | `--variation {0,1,2,3}` | natural variation on top of the fixed constraints |
 | Concurrency | `--concurrency` | parallel requests (CLI default 1) |
+| 3D mask segmentation | `--mask-print` | local six-panel derivative for RGB faces; no additional provider request |
+| Mask shell size | `--mask-width-mm` / `--mask-height-mm` | defaults 187.0 × 245.0 mm along the shell surface |
+| Mask eye geometry | `--mask-eye-inner-gap-mm`, `--mask-eye-width-mm`, `--mask-eye-height-mm`, `--mask-eye-center-from-top-mm` | defaults 40.0 mm, 38.0 × 18.0 mm each, 103.0 mm from top |
+| Mask nose geometry | `--mask-nose-width-mm` / `--mask-nose-length-mm` | defaults 40.0 × 30.0 mm along the raised nose plane |
+| Mask print geometry | `--mask-overlap-mm` / `--mask-dpi` | defaults 1.5 mm overlap, A4 at 300 dpi |
 | Filename prefix | `--prefix` | default `portrait` → `portrait_000001.png` |
 | Retries | `--max-retries` / `--no-retry` | default 3 retries with backoff |
 | Reproducibility | `--seed` | per-image seed is `base + index`, so the batch repeats exactly |
 
-The TUI exposes the same settings as form controls in the Studio screen and re-plans the cost and distribution on every change. `--list-models` prints the registry; `--dry-run` plans and estimates without generating.
+The TUI exposes the same settings in its dedicated **3D MASK SEGMENTATION**
+category and re-plans the cost and distribution on every change. In the contact
+sheet, press `p` for a selected frame's verified colour mask PDF or `k` for its
+calibration PDF. `--list-models` prints the registry; `--dry-run` plans and
+estimates without generating.
 
 Optional defaults live in `.env`: `PORTRAIT_DEFAULT_PROVIDER`, `PORTRAIT_DEFAULT_MODEL`, `PORTRAIT_OUTPUT_BASE_DIR`, `PORTRAIT_ALLOW_CUSTOM_BUCKETS`, `PORTRAIT_MODEL_REGISTRY_PATH`.
 
@@ -166,10 +364,10 @@ None of the bundled real providers return a billed per-image amount, so their co
 
 The darkroom build is a multi-screen [Textual](https://textual.textualize.io) app, keyboard-first throughout. Top nav: **studio · darkroom · contact · archive**.
 
-- **Studio** (`f2`) — compose the batch. Model picker with prices and key status (`ctrl+n`), size / count / variation / distribution / seed / concurrency, colour-coded demographic buckets, per-bucket weights in weighted mode, and a live readout that re-plans the exact cost and distribution on every change. `ctrl+e` pages through the actual planned prompts.
+- **Studio** (`f2`) — compose the batch. Model picker with prices and key status (`ctrl+n`), size / count / variation / distribution / seed / concurrency, colour-coded demographic buckets, per-bucket weights in weighted mode, and a live readout that re-plans the exact cost and distribution on every change. The dedicated **3D MASK SEGMENTATION** category exposes the measured shell, eye and nose geometry plus live QC/export status. `ctrl+e` pages through the actual planned prompts.
 - **Expose** (`ctrl+g`) — the one irreversible step: a confirm-spend modal. Priced runs arm on `enter` and confirm on a second `enter`; free runs confirm in one press; un-priced models show `-.--` (never a fake `0.00`) and require typing `spend`. Generation only ever starts after this.
 - **Darkroom** — the live run, in panels: **batch** (a glyph-per-frame matrix you can recolour by state / age / gender / ethnicity as a live bias check), **lanes** (concurrency), **throughput** (sparkline with a stall-aware ETA), **cost** (EST / BURN / BILL ledger — see Cost accounting), **coverage** (per-bucket bars), **failures** (triage table), **event log**, and **the print** — the newest portrait rendered live in half-block pixels.
-- **Contact sheet** — every frame of a finished run as a thumbnail grid, with a near-fullscreen lightbox (`enter`) and the exact prompt per image (`v`).
+- **Contact sheet** — every frame of a finished run as a thumbnail grid, with a near-fullscreen lightbox (`enter`), the exact prompt per image (`v`), verified 3D mask status, colour mask PDF (`p`) and calibration PDF (`k`).
 - **Archive** (`f3`) — every past run reconstructed from `manifest.json` / `metadata.jsonl` on disk; sortable, filterable, with lifetime totals. An unreadable manifest degrades to a dimmed row, never a crash.
 
 During a run: `c` recolour · `l` filter log · `f` failures · `o` reveal output · `enter` contact sheet · `esc` back to the studio (the run keeps going) · `ctrl+x` twice cancels (in-flight frames finish, queued frames skip, everything on disk is kept). Global: `f1` lists every key · `ctrl+t` cycles four themes (darkroom / gallery / synthwave / safelight) · `ctrl+p` opens the command palette. Compose settings persist between sessions in `~/.portrait_studio_tui.json` (never secrets); set `PORTRAIT_TUI_ASCII=1` for plain-ASCII glyphs.
@@ -228,7 +426,7 @@ Failures are kept, not dropped: `{"id": "portrait_000042", "status": "failed", "
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 144 tests, no network — real provider APIs are never called
+pytest                 # 207 tests, no network — real provider APIs are never called
 ```
 
 Run the front-ends straight from source: `python -m app.cli.generate`, `python -m app.tui.main`, `python -m app.gui.main`. The package installs editable, so there's no separate build step.
@@ -239,7 +437,7 @@ No linter or type-checker is wired into the project config yet. The suite covers
 
 Not built yet — direction, not promises:
 
-- face-detection crop normalization, to enforce the framing head height exactly
+- optional scan-derived mesh/UV templates for mask models beyond the calibrated parametric shell
 - richer metadata export and dataset manifests
 - prompt / template version tracking per run
 - duplicate / near-duplicate detection

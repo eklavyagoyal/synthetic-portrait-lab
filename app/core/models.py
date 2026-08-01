@@ -170,6 +170,52 @@ class ExactCount(BaseModel):
     count: int = Field(ge=0)
 
 
+class MaskPrintOptions(BaseModel):
+    """Physical calibration for the optional segmented mask print pack.
+
+    The defaults describe the first measured white mask prototype.  They are
+    deliberately explicit and serialized into every run manifest so a physical
+    print can always be traced back to the exact template revision used.
+    """
+
+    width_mm: float = Field(187.0, ge=100.0, le=300.0)
+    height_mm: float = Field(245.0, ge=150.0, le=400.0)
+    eye_inner_gap_mm: float = Field(40.0, ge=15.0, le=100.0)
+    eye_opening_width_mm: float = Field(38.0, ge=15.0, le=70.0)
+    eye_opening_height_mm: float = Field(18.0, ge=8.0, le=40.0)
+    eye_center_from_top_mm: float = Field(103.0, ge=40.0, le=180.0)
+    nose_base_width_mm: float = Field(40.0, ge=20.0, le=80.0)
+    nose_length_mm: float = Field(30.0, ge=15.0, le=80.0)
+    overlap_mm: float = Field(1.5, ge=0.0, le=5.0)
+    dpi: int = Field(300, ge=150, le=600)
+    page_size: str = "A4"
+    # v2 replaces the former dark-pixel eye heuristic with a scored five-point
+    # landmark detector and refuses geometrically implausible print packs.
+    template_version: str = "landmarks-v2"
+
+    @field_validator("page_size")
+    @classmethod
+    def _a4_only(cls, value: str) -> str:
+        normalized = (value or "A4").strip().upper()
+        if normalized != "A4":
+            raise ValueError("mask print page_size currently supports A4 only.")
+        return normalized
+
+    @model_validator(mode="after")
+    def _physical_fit(self) -> "MaskPrintOptions":
+        occupied_eye_width = (
+            self.eye_inner_gap_mm + 2.0 * self.eye_opening_width_mm
+        )
+        if occupied_eye_width >= self.width_mm - 8.0:
+            raise ValueError(
+                "eye openings plus inner gap must fit inside the mask width "
+                "with at least 4 mm margin per side."
+            )
+        if self.eye_center_from_top_mm + self.eye_opening_height_mm / 2 >= self.height_mm:
+            raise ValueError("eye openings must fit inside the mask height.")
+        return self
+
+
 class BatchGenerationRequest(BaseModel):
     """The complete, validated description of what the user asked to generate.
 
@@ -230,6 +276,10 @@ class BatchGenerationRequest(BaseModel):
     extra_positive_constraints: list[str] = Field(default_factory=list)
     extra_negative_constraints: list[str] = Field(default_factory=list)
     face_crop: bool = False
+    # Optional deterministic physical print output. When present, successful RGB
+    # portraits keep their original image and additionally receive a segmented
+    # A4 print pack. No second image-generation request is made.
+    mask_print: Optional[MaskPrintOptions] = None
 
     # Whether to persist the full rendered prompt into per-image metadata
     save_prompt: bool = True
@@ -326,6 +376,14 @@ class GenerationResult(BaseModel):
     exact_age: Optional[int] = None
     appearance_signature: Optional[str] = None  # dedup key — see appearance.Appearance
     appearance: Optional[dict] = None            # full sampled descriptor
+    # Optional deterministic physical mask-print artifacts, stored relative to
+    # the run directory. These are local derivatives, not billable model outputs.
+    mask_preview_filename: Optional[str] = None
+    mask_print_pdf: Optional[str] = None
+    mask_calibration_pdf: Optional[str] = None
+    mask_cutlines_svg: Optional[str] = None
+    mask_print_pages: Optional[list[str]] = None
+    mask_print_error: Optional[str] = None
     estimated_cost_usd: Optional[float] = None   # local per-image estimate
     actual_cost_usd: Optional[float] = None      # provider-reported $ ONLY (None if unreported)
     cost_is_estimated: bool = True               # True => no provider-reported cost available
@@ -341,6 +399,12 @@ class GenerationResult(BaseModel):
         rec: "OrderedDict[str, Any]" = OrderedDict()
         rec["id"] = self.id
         rec["filename"] = self.filename
+        rec["mask_preview_filename"] = self.mask_preview_filename
+        rec["mask_print_pdf"] = self.mask_print_pdf
+        rec["mask_calibration_pdf"] = self.mask_calibration_pdf
+        rec["mask_cutlines_svg"] = self.mask_cutlines_svg
+        rec["mask_print_pages"] = self.mask_print_pages
+        rec["mask_print_error"] = self.mask_print_error
         rec["provider"] = self.provider
         rec["model"] = self.model
         rec["modality"] = self.modality

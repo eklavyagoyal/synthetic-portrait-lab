@@ -67,6 +67,8 @@ class ContactSheetScreen(Screen):
         Binding("v", "prompt", "prompt"),
         Binding("f", "filter", "filter"),
         Binding("m", "metadata", "metadata"),
+        Binding("p", "mask_pack", "3D mask PDF"),
+        Binding("k", "mask_calibration", "calibration"),
         Binding("plus,equals_sign", "thumb_size(1)", "bigger", key_display="+"),
         Binding("minus", "thumb_size(-1)", "smaller", key_display="-"),
         Binding("o", "reveal", "reveal"),
@@ -196,7 +198,8 @@ class ContactSheetScreen(Screen):
             f" · {len(message.items)} frames"
             f" · {esc(str(self._header.get('model', '?')))} · {cost_str}"
             f" · seed {seed if seed is not None else 'random'}{trunc_note}"
-            f"      [$text-muted]enter lightbox · v prompt · f filter · m metadata[/]"
+            f"      [$text-muted]enter lightbox · v prompt · p 3D mask · "
+            "k calibration · f filter · m metadata[/]"
         )
         await self._build_tiles()
         if not self._items:
@@ -324,6 +327,21 @@ class ContactSheetScreen(Screen):
         prompt = str(item.get("prompt") or "")
         prompt_head = esc("\n".join(prompt.splitlines()[:6]))
         error = item.get("error")
+        mask_error = item.get("mask_print_error")
+        mask_pdf = item.get("mask_print_pdf")
+        if mask_error:
+            mask_line = (
+                f"\n[$tele-fail]3D mask segmentation rejected: "
+                f"{esc(str(mask_error))}[/]"
+            )
+        elif mask_pdf:
+            mask_line = (
+                f"\n[$tele-ok]{glyphs.CHECK} 3D mask segmentation verified[/]"
+                f"\n[$text-muted]colour PDF   {esc(str(mask_pdf))} · press p[/]"
+                f"\n[$text-muted]calibration  press k before the first colour print[/]"
+            )
+        else:
+            mask_line = ""
         self.query_one("#meta-card").border_title = str(item.get("id") or "frame")
         body.update(
             labels.triple_chips(
@@ -335,6 +353,7 @@ class ContactSheetScreen(Screen):
             + f"\nseed {seed if seed is not None else 'random'} · {item.get('size', '?')} · {cost_str}"
             + f"\n[$text-muted]file  images/{esc(str(item.get('filename') or '—'))}[/]"
             + (f"\n[$tele-fail]{esc(str(error))}[/]" if error else "")
+            + mask_line
             + (
                 f"\n[$text-muted]{'┄' * 30}[/]\n[$text-muted]{prompt_head}[/]"
                 f"\n[$text-muted]v full prompt[/]"
@@ -392,6 +411,52 @@ class ContactSheetScreen(Screen):
 
     def action_metadata(self) -> None:
         self.toggle_class("-no-meta")
+
+    def action_mask_pack(self) -> None:
+        item = self._items[self._selected] if self._items else None
+        if not item:
+            return
+        if item.get("mask_print_error"):
+            self.notify(
+                str(item["mask_print_error"]),
+                severity="warning",
+                title="3D mask segmentation rejected",
+                timeout=6,
+            )
+            return
+        relative = item.get("mask_print_pdf")
+        if not relative:
+            self.notify("No 3D mask PDF for this frame.", severity="warning", timeout=3)
+            return
+        path = self._run_dir / str(relative)
+        reveal = getattr(self.app, "reveal_path", None)
+        if reveal:
+            reveal(path)
+
+    def action_mask_calibration(self) -> None:
+        item = self._items[self._selected] if self._items else None
+        if not item:
+            return
+        if item.get("mask_print_error"):
+            self.notify(
+                str(item["mask_print_error"]),
+                severity="warning",
+                title="3D mask segmentation rejected",
+                timeout=6,
+            )
+            return
+        relative = item.get("mask_calibration_pdf")
+        if not relative:
+            self.notify(
+                "No calibration PDF for this frame.",
+                severity="warning",
+                timeout=3,
+            )
+            return
+        path = self._run_dir / str(relative)
+        reveal = getattr(self.app, "reveal_path", None)
+        if reveal:
+            reveal(path)
 
     def action_thumb_size(self, delta: int) -> None:
         order = ("S", "M", "L")

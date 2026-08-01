@@ -28,6 +28,7 @@ from ..core.models import (
     DistributionMode,
     EventType,
     GenerationEvent,
+    MaskPrintOptions,
     Run,
 )
 from ..core.pricing import UnknownModelError
@@ -204,6 +205,25 @@ def _build_parser(cfg: AppConfig) -> argparse.ArgumentParser:
         action="store_true",
         help="Plan + estimate and print the confirmation block without generating.",
     )
+    mask_group = parser.add_argument_group(
+        "3D mask segmentation",
+        "Deterministic local derivative; does not make another image API call.",
+    )
+    mask_group.add_argument(
+        "--mask-print",
+        action="store_true",
+        help="Create preview, A4 panel pages, print PDF, calibration PDF and SVG cut lines.",
+    )
+    mask_group.add_argument("--mask-width-mm", type=float, default=187.0)
+    mask_group.add_argument("--mask-height-mm", type=float, default=245.0)
+    mask_group.add_argument("--mask-eye-inner-gap-mm", type=float, default=40.0)
+    mask_group.add_argument("--mask-eye-width-mm", type=float, default=38.0)
+    mask_group.add_argument("--mask-eye-height-mm", type=float, default=18.0)
+    mask_group.add_argument("--mask-eye-center-from-top-mm", type=float, default=103.0)
+    mask_group.add_argument("--mask-nose-width-mm", type=float, default=40.0)
+    mask_group.add_argument("--mask-nose-length-mm", type=float, default=30.0)
+    mask_group.add_argument("--mask-overlap-mm", type=float, default=1.5)
+    mask_group.add_argument("--mask-dpi", type=int, default=300)
     return parser
 
 
@@ -275,6 +295,20 @@ def _build_request(args: argparse.Namespace, cfg: AppConfig) -> BatchGenerationR
         glasses=args.ir_glasses,
         eye_makeup=args.ir_makeup,
     )
+    mask_print = None
+    if args.mask_print:
+        mask_print = MaskPrintOptions(
+            width_mm=args.mask_width_mm,
+            height_mm=args.mask_height_mm,
+            eye_inner_gap_mm=args.mask_eye_inner_gap_mm,
+            eye_opening_width_mm=args.mask_eye_width_mm,
+            eye_opening_height_mm=args.mask_eye_height_mm,
+            eye_center_from_top_mm=args.mask_eye_center_from_top_mm,
+            nose_base_width_mm=args.mask_nose_width_mm,
+            nose_length_mm=args.mask_nose_length_mm,
+            overlap_mm=args.mask_overlap_mm,
+            dpi=args.mask_dpi,
+        )
     return BatchGenerationRequest(
         provider=args.provider,
         model_id=args.model,
@@ -298,6 +332,8 @@ def _build_request(args: argparse.Namespace, cfg: AppConfig) -> BatchGenerationR
         concurrency=args.concurrency,
         diversify=not args.no_diversify,
         dedup_history=not args.no_dedup_history,
+        face_crop=bool(args.mask_print),
+        mask_print=mask_print,
     )
 
 
@@ -341,6 +377,13 @@ def _print_confirmation(run: Run) -> None:
         print("Framing: near-infrared iris capture (4:3 landscape)")
     else:
         print(f"Framing: {framing_label(pct)} (head ~{pct}% of image height)")
+    if run.request.mask_print:
+        mask = run.request.mask_print
+        print(
+            f"Mask print: {mask.width_mm:.1f} x {mask.height_mm:.1f} mm, "
+            f"{mask.dpi} dpi, 6 panels + calibration"
+        )
+        print("Mask print API cost: $0.00 (local deterministic derivative)")
     print(f"Estimated price per image: {per_image}")
     print(f"Estimated total cost: {est.human_summary()}")
     print("  (estimate is for planned outputs; retried/failed attempts are billed too)")
@@ -400,6 +443,12 @@ def _print_summary(run: Run) -> None:
         for r in failures:
             print(f"  {r.id}: {r.error}")
 
+    mask_failures = [r for r in run.results if r.mask_print_error]
+    if mask_failures:
+        print(f"Mask print exports rejected by quality control ({len(mask_failures)}):")
+        for result in mask_failures:
+            print(f"  {result.id}: {result.mask_print_error}")
+
 
 # --------------------------------------------------------------------------- #
 # Entry point
@@ -457,7 +506,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     _print_summary(run)
-    return 1 if run.failure_count else 0
+    mask_print_failed = any(result.mask_print_error for result in run.results)
+    return 1 if (run.failure_count or mask_print_failed) else 0
 
 
 if __name__ == "__main__":

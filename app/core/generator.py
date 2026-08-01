@@ -24,6 +24,7 @@ from .config import AppConfig
 from .diversity import load_seen_signatures
 from .iris import to_grayscale
 from .metadata import MetadataWriter
+from .mask_print import create_mask_print_pack
 from .models import (
     BatchGenerationRequest,
     CaptureModality,
@@ -71,6 +72,11 @@ class Generator:
     def create_run(self, request: BatchGenerationRequest) -> Run:
         self._validate_buckets(request)
         model_info = self.pricing.get_model_info(request.provider, request.model_id)
+
+        if request.mask_print and request.modality != CaptureModality.RGB_FACE:
+            raise ValueError(
+                "Segmented mask printing currently supports the RGB face modality only."
+            )
 
         # Modality-specific canvas. An IR iris capture uses a 4:3 landscape frame
         # (ISO/IEC 19794-6); an A4 face portrait uses the A4 ratio. Both override the
@@ -333,6 +339,26 @@ class Generator:
                 )
                 image_bytes = self._postprocess(run.request.modality, pr.image_bytes)
                 self.storage.save_image(run.output_dir, item.filename, image_bytes)
+                mask_print_record: dict[str, object] = {}
+                mask_print_error = None
+                if run.request.mask_print:
+                    try:
+                        pack = await asyncio.to_thread(
+                            create_mask_print_pack,
+                            image_bytes,
+                            run.output_dir / "print" / item.id,
+                            asset_id=item.id,
+                            options=run.request.mask_print,
+                            source_filename=item.filename,
+                        )
+                        mask_print_record = pack.relative_record(run.output_dir)
+                    except Exception as exc:  # noqa: BLE001 - preserve paid portrait
+                        mask_print_error = f"{type(exc).__name__}: {exc}"
+                        logger.warning(
+                            "Mask print export failed for %s (%s); keeping original portrait.",
+                            item.id,
+                            mask_print_error,
+                        )
                 # "actual" is ONLY a provider-reported USD amount. If the provider
                 # doesn't report one (OpenAI/Gemini/etc.), we keep it None and the
                 # number stays an estimate — we never echo the estimate as "actual".
@@ -347,6 +373,8 @@ class Generator:
                         "actual_cost_usd": provider_cost,
                         "cost_is_estimated": provider_cost is None,
                         "provider_usage": pr.usage,
+                        **mask_print_record,
+                        "mask_print_error": mask_print_error,
                         "attempts": attempts,
                         "retries": attempts - 1,
                         "error": None,

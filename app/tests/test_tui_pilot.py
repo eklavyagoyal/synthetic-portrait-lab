@@ -111,7 +111,10 @@ async def test_modality_ir_swaps_face_controls_for_iris_realism(app):
         studio = _studio(app)
 
         # RGB (default): face-portrait controls visible; iris realism hidden.
-        for sel in ("#framing", "#face-crop-row", "#portrait-style-fields", "#size"):
+        for sel in (
+            "#framing", "#face-crop-row", "#portrait-style-fields", "#size",
+            "#mask-print-controls",
+        ):
             assert studio.query_one(sel).display, sel
         assert not studio.query_one("#iris-realism-fields").display
 
@@ -120,7 +123,8 @@ async def test_modality_ir_swaps_face_controls_for_iris_realism(app):
         studio.query_one("#modality", Select).value = "ir"
         await pilot.pause(0.3)
         for sel in ("#framing", "#framing-label", "#face-crop-row",
-                    "#portrait-style-fields", "#size", "#size-label"):
+                    "#portrait-style-fields", "#size", "#size-label",
+                    "#mask-print-controls"):
             assert not studio.query_one(sel).display, sel
         assert studio.query_one("#iris-realism-fields").display
 
@@ -140,6 +144,122 @@ async def test_modality_ir_swaps_face_controls_for_iris_realism(app):
         await pilot.pause(0.3)
         assert studio.query_one("#framing").display
         assert not studio.query_one("#iris-realism-fields").display
+
+
+async def test_mask_print_controls_flow_into_request(app):
+    from textual.widgets import Input, Switch
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause(0.4)
+        studio = _studio(app)
+        studio.query_one("#mask-print-switch", Switch).value = True
+        studio.query_one("#mask-width-mm", Input).value = "187.5"
+        studio.query_one("#mask-dpi", Input).value = "300"
+        await pilot.pause(0.3)
+
+        draft = studio._draft_request()
+        assert draft.mask_print is not None
+        assert draft.mask_print.width_mm == 187.5
+        assert draft.mask_print.dpi == 300
+        assert draft.face_crop is True
+        assert "landmark QC" in str(studio.query_one("#plan-headline").render())
+
+        # An explicit unsafe measurement must block the run, never fall back to
+        # the 187 mm preset behind the user's back.
+        studio.query_one("#mask-width-mm", Input).value = "0"
+        await pilot.pause(0.3)
+        assert studio.query_one("#expose-btn").disabled
+        blocked = str(studio.query_one("#mask-geometry-preview").render())
+        assert "BLOCKED" in blocked
+        assert "greater than or equal to 100" in blocked
+
+
+async def test_3d_mask_segmentation_runs_end_to_end_from_tui(app, monkeypatch):
+    """The Studio category must drive the real local export, not only a draft."""
+    from textual.widgets import Input, Switch
+
+    from app.core.mask_print import FaceLandmarks
+
+    def fixture_landmarks(source):
+        width, height = source.size
+        return FaceLandmarks(
+            face_bbox=(width * 0.25, height * 0.15, width * 0.50, height * 0.70),
+            left_eye=(width * 0.40, height * 0.42),
+            right_eye=(width * 0.60, height * 0.42),
+            nose_tip=(width * 0.50, height * 0.54),
+            left_mouth=(width * 0.44, height * 0.62),
+            right_mouth=(width * 0.56, height * 0.62),
+            confidence=0.99,
+            detected_faces=1,
+        )
+
+    monkeypatch.setattr("app.core.mask_print._detect_face_landmarks", fixture_landmarks)
+    revealed: list[Path] = []
+    monkeypatch.setattr(app, "reveal_path", revealed.append)
+
+    async with app.run_test(size=(140, 50)) as pilot:
+        await pilot.pause(0.4)
+        studio = _studio(app)
+        studio.query_one("#batch-size", Input).value = "1"
+        studio.query_one("#mask-print-switch", Switch).value = True
+        studio.query_one("#mask-dpi", Input).value = "150"
+        await pilot.pause(0.4)
+
+        geometry = str(studio.query_one("#mask-geometry-preview").render())
+        assert "187.0 W × 245.0 H mm" in geometry
+        assert "6 · 1.5 mm overlap · A4 @ 150 dpi" in geometry
+        assert "FAIL-CLOSED QC" in geometry
+
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ExposeModal)
+        expose_rows = "\n".join(
+            str(widget.render()) for widget in app.screen.query("#expose-rows Static")
+        )
+        assert "3D mask" in expose_rows
+        await pilot.press("enter")
+        await _wait_run_end(pilot, app)
+        await pilot.pause(0.5)
+
+        run = app.current_run
+        assert run is not None and len(run.results) == 1
+        result = run.results[0]
+        assert result.mask_print_error is None
+        assert result.mask_print_pdf and result.mask_calibration_pdf
+        assert result.mask_preview_filename and result.mask_cutlines_svg
+        assert result.mask_print_pages and len(result.mask_print_pages) == 2
+
+        expected = (
+            result.mask_preview_filename,
+            result.mask_print_pdf,
+            result.mask_calibration_pdf,
+            result.mask_cutlines_svg,
+            *result.mask_print_pages,
+        )
+        assert all((run.output_dir / relative).is_file() for relative in expected)
+
+        pack_dir = (run.output_dir / result.mask_print_pdf).parent
+        metadata = json.loads((pack_dir / f"{result.id}_mask.json").read_text())
+        assert metadata["template"]["template_version"] == "landmarks-v2"
+        assert metadata["template"]["width_mm"] == 187.0
+        assert metadata["template"]["height_mm"] == 245.0
+        assert metadata["normalization"]["quality_control"]["status"] == "passed"
+        assert metadata["normalization"]["alignment_transform"][
+            "max_eye_registration_error_px"
+        ] <= 1.25
+
+        await pilot.press("enter")
+        await pilot.pause(0.8)
+        assert isinstance(app.screen, ContactSheetScreen)
+        meta = str(app.screen.query_one("#meta-body").render())
+        assert "3D mask segmentation verified" in meta
+
+        await pilot.press("p")
+        await pilot.press("k")
+        assert revealed == [
+            run.output_dir / result.mask_print_pdf,
+            run.output_dir / result.mask_calibration_pdf,
+        ]
 
 
 async def test_prompt_peek_and_model_picker_modals(app):

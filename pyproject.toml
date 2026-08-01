@@ -15,6 +15,9 @@ dependencies = [
     "python-dotenv>=1.0",
     "httpx>=0.27",
     "pillow>=10.0",
+    "numpy>=2.0,<3",
+    "opencv-python-headless>=4.10,<5",
+    "reportlab>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -27,12 +30,13 @@ all = ["textual>=0.60", "rich>=13.0", "nicegui>=1.4", "pywebview>=5.0", "pytest>
 portrait-cli = "app.cli.generate:main"
 portrait-tui = "app.tui.main:main"
 portrait-gui = "app.gui.main:main"
+portrait-mask-print = "app.cli.mask_print:main"
 
 [tool.setuptools]
 packages = ["app", "app.core", "app.core.providers", "app.tui", "app.gui", "app.cli"]
 
 [tool.setuptools.package-data]
-"app.core" = ["model_registry.json"]
+"app.core" = ["model_registry.json", "assets/*.onnx", "assets/*.txt"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

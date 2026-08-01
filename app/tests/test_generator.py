@@ -13,10 +13,12 @@ import pytest
 
 from app.core.config import AppConfig
 from app.core.generator import Generator, RunNotConfirmedError, run_batch
+from app.core.mask_print import FaceLandmarks
 from app.core.models import (
     BatchGenerationRequest,
     DistributionMode,
     ItemStatus,
+    MaskPrintOptions,
     ProviderResult,
     RunStatus,
 )
@@ -146,6 +148,53 @@ async def test_run_batch_with_auto_confirm_completes(tmp_path):
     )
     assert run.status == RunStatus.COMPLETED
     assert run.success_count == 3
+
+
+async def test_optional_mask_print_pack_keeps_original_and_adds_derivatives(tmp_path, monkeypatch):
+    def fixture_landmarks(source):
+        width, height = source.size
+        return FaceLandmarks(
+            face_bbox=(width * 0.25, height * 0.15, width * 0.50, height * 0.70),
+            left_eye=(width * 0.40, height * 0.42),
+            right_eye=(width * 0.60, height * 0.42),
+            nose_tip=(width * 0.50, height * 0.54),
+            left_mouth=(width * 0.44, height * 0.62),
+            right_mouth=(width * 0.56, height * 0.62),
+            confidence=0.99,
+            detected_faces=1,
+        )
+
+    monkeypatch.setattr("app.core.mask_print._detect_face_landmarks", fixture_landmarks)
+    config = AppConfig.load()
+    request = _request(tmp_path, total_count=1)
+    request = request.model_copy(
+        update={"mask_print": MaskPrintOptions(dpi=150), "face_crop": True}
+    )
+
+    run = await run_batch(
+        config,
+        request,
+        auto_confirm=True,
+        provider=MockProvider(),
+    )
+
+    result = run.results[0]
+    assert result.status == ItemStatus.SUCCESS
+    assert (run.images_dir / result.filename).exists()
+    assert result.mask_print_error is None
+    assert result.mask_preview_filename
+    assert result.mask_print_pdf
+    assert result.mask_calibration_pdf
+    assert result.mask_cutlines_svg
+    assert result.mask_print_pages
+    for relative in (
+        result.mask_preview_filename,
+        result.mask_print_pdf,
+        result.mask_calibration_pdf,
+        result.mask_cutlines_svg,
+        *result.mask_print_pages,
+    ):
+        assert (run.output_dir / relative).exists()
 
 
 # --------------------------------------------------------------------------- #
