@@ -13,15 +13,32 @@
       }
     },
     "openai": {
-      "gpt-image-1": {
-        "display_name": "OpenAI gpt-image-1",
-        "supports_size": ["1024x1024", "1024x1536", "1536x1024"],
+      "gpt-image-2.5-flare": {
+        "display_name": "OpenAI GPT Image 2.5 Flare",
+        "supports_size": [
+          "1024x1024", "1024x1536", "1536x1024", "2048x2048",
+          "2048x1152", "1152x2048", "1920x1088", "1088x1920",
+          "3840x2160", "2160x3840"
+        ],
         "default_size": "1024x1024",
-        "price_per_image_usd": 0.07,
-        "quality_prices": { "low": 0.02, "medium": 0.07, "high": 0.19 },
+        "price_per_image_usd": null,
         "default_quality": "medium",
-        "supports_quality": ["low", "medium", "high", "auto"],
-        "pricing_source": "gpt-image is billed per token; approx per ~1024x1024 image by quality (low/medium/high ~= $0.02/$0.07/$0.19). Larger sizes cost more, and retried/failed attempts are billed. Verify before use.",
+        "supports_quality": ["low", "medium", "high", "xhigh", "max", "auto"],
+        "pricing_source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare (checked 2026-11-02): Standard image output is $30 per million tokens. Token consumption varies; the GPT Image 2 calculator does not estimate GPT Image 2.5 usage. No fixed per-image estimate is configured.",
+        "reports_actual_cost": false
+      },
+      "gpt-image-2.5-sunburst": {
+        "display_name": "OpenAI GPT Image 2.5 Sunburst",
+        "supports_size": [
+          "1024x1024", "1024x1536", "1536x1024", "2048x2048",
+          "2048x1152", "1152x2048", "1920x1088", "1088x1920",
+          "3840x2160", "2160x3840"
+        ],
+        "default_size": "1024x1024",
+        "price_per_image_usd": null,
+        "default_quality": "medium",
+        "supports_quality": ["low", "medium", "high", "xhigh", "max", "auto"],
+        "pricing_source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst (checked 2026-11-02): Standard image output is $30 per million tokens. Token consumption varies; the GPT Image 2 calculator does not estimate GPT Image 2.5 usage. No fixed per-image estimate is configured.",
         "reports_actual_cost": false
       },
       "gpt-image-2": {

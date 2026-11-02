@@ -69,7 +69,8 @@ def test_unsupported_transparency_is_rejected_before_generation(overrides, messa
 
 
 @pytest.mark.parametrize("transparent", [False, True])
-async def test_openai_payload_requests_native_transparency(transparent):
+@pytest.mark.parametrize("model_id", ["gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+async def test_openai_payload_requests_native_transparency(transparent, model_id):
     expected = await MockProvider().generate(
         prompt="portrait", size="512x512", model_id="mock-image", transparent_background=True,
     )
@@ -87,12 +88,13 @@ async def test_openai_payload_requests_native_transparency(transparent):
     )
     try:
         result = await provider.generate(
-            prompt="portrait", size="1024x1536", model_id="gpt-image-1",
+            prompt="portrait", size="1024x1536", model_id=model_id,
             quality="high", transparent_background=transparent,
         )
     finally:
         await provider.aclose()
     payload = payloads[0]
+    assert payload["model"] == model_id
     assert payload["quality"] == "high"
     assert payload["size"] == "1024x1536"
     if transparent:

@@ -283,7 +283,7 @@ Everything you'd want to control on a run, and the flag that controls it:
 | Output directory | `--output` | defaults to a timestamped dir under `./outputs` |
 | Provider / model | `--provider` / `--model` | defaults from `.env`; see [Providers](#providers) |
 | Size | `--size` | canvas resolution; default `1024x1024` (see Resolution and framing) |
-| Quality | `--quality {low,medium,high,auto}` | render quality; drives price on token-billed models (default medium) |
+| Quality | `--quality {low,medium,high,xhigh,max,auto}` | render quality; `xhigh` and `max` require GPT Image 2.5 (default medium) |
 | Framing | `--framing {close,standard,loose,upper-body}` | how much of the image height the head fills |
 | Head height | `--head-height-pct` | exact head share, 20–90; overrides `--framing` |
 | Head area | `--head-area-pct` | head bounding rectangle as % of the whole image, 1–80; overrides head-height framing and preserves canvas dimensions |
@@ -381,7 +381,7 @@ also be consistent with a transparent background.
 
 **Resolution and framing** are independent: resolution is the canvas, framing is how large the head sits inside it.
 
-- *Size* (`--size`, default `1024x1024`) picks the canvas. Each model lists its sizes (`--list-models`). `gpt-image-2` ships ten presets from `1024x1024` up to 4K (`3840x2160` / `2160x3840`) and also accepts custom resolutions — both edges multiples of 16, longest edge ≤ 3840, aspect ≤ 3:1, total pixels between 0.66 MP and 8.29 MP. Sizes that fail these rules are rejected before any spend.
+- *Size* (`--size`, default `1024x1024`) picks the canvas. Each model lists its sizes (`--list-models`). GPT Image 2 and both GPT Image 2.5 models ship ten presets from `1024x1024` up to 4K (`3840x2160` / `2160x3840`) and also accept custom resolutions — both edges multiples of 16, longest edge ≤ 3840, aspect ≤ 3:1, total pixels between 0.66 MP and 8.29 MP. Sizes that fail these rules are rejected before any spend.
 - *Framing* (`--framing` / `--head-height-pct`) sets the head's share of the image height, measured top of hair to chin: close headshot 75% · standard headshot 60% · loose headshot 45% · upper body 30%. `--head-height-pct` takes an exact value (20–90) and overrides the preset.
 
 > Framing is a prompt instruction, not a measured crop — the model approximates the head size, it isn't pixel-exact. Detecting the face box and cropping/padding to enforce it precisely is a planned post-processing step.
@@ -427,12 +427,31 @@ When the API returns a usage/token object, it's captured into `manifest.json` (`
 | Provider | Key | Models |
 |---|---|---|
 | `mock` | — | free, offline, deterministic PNGs — the default, and what the tests use |
-| `openai` | `OPENAI_API_KEY` | `gpt-image-1`, `gpt-image-2` |
+| `openai` | `OPENAI_API_KEY` | `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2` |
 | `google` | `GEMINI_API_KEY` | `nano-banana` (Gemini 2.5 Flash Image), `nano-banana-pro` (Gemini 3 Pro Image) |
 | `fal` | `FAL_KEY` | `imagen4`, `flux/dev` |
 | `replicate` | `REPLICATE_API_TOKEN` | `black-forest-labs/flux-schnell` |
 
-None of the bundled real providers return a billed per-image amount, so their cost is reported as *estimated* (computed from the registry price). Adding a provider is one small subclass of `ImageProvider` in `app/core/providers/`, registered in `registry.py`, plus its models in the registry JSON.
+**GPT Image 2.5:** choose **Flare** for speed or **Sunburst** for the most demanding
+image-quality requirements. Both use the existing OpenAI key and support
+transparent PNGs, custom resolutions, and `low`, `medium`, `high`, `xhigh`, `max`
+or `auto` quality. The quality picker shows only the selected model's supported
+levels; switching to an older model resets an unsupported level to its default.
+GPT Image 1 has been removed from the bundled registry; a saved TUI selection of
+that retired model moves to Flare when preferences load.
+
+OpenAI documents token-based pricing for both 2.5 models and states that the GPT
+Image 2 calculator cannot estimate their token consumption. Their bundled
+per-image prices are therefore **unknown**, using the app's existing explicit
+spend confirmation. Returned token usage is still saved for auditing. See the
+[Flare model documentation](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare),
+[Sunburst model documentation](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst),
+and [size, quality and transparency settings](https://developers.openai.com/api/docs/guides/image-prompting#model-parameters).
+
+None of the bundled real providers return a billed per-image amount. When a
+registry price is available, cost is reported as *estimated*; otherwise it stays
+unknown. Adding a provider is one small subclass of `ImageProvider` in
+`app/core/providers/`, registered in `registry.py`, plus its models in the registry JSON.
 
 ## The TUI
 

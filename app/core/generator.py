@@ -72,6 +72,11 @@ class Generator:
     def create_run(self, request: BatchGenerationRequest) -> Run:
         self._validate_buckets(request)
         model_info = self.pricing.get_model_info(request.provider, request.model_id)
+        if request.quality not in model_info.available_qualities:
+            raise ValueError(
+                f"Quality {request.quality!r} is not supported by {request.provider}/{request.model_id}. "
+                f"Choose from: {', '.join(model_info.available_qualities)}."
+            )
 
         if request.mask_print and request.modality != CaptureModality.RGB_FACE:
             raise ValueError(

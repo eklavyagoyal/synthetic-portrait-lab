@@ -26,7 +26,7 @@ _MAX_BODY_CHARS = 500  # truncate error bodies so we never log huge payloads
 
 
 class OpenAIProvider(ImageProvider):
-    """Generate images via the OpenAI Images API (``gpt-image-1``)."""
+    """Generate images via the OpenAI Images API (GPT Image 2 and 2.5)."""
 
     provider_name = "openai"
     requires_api_key = True
@@ -69,7 +69,7 @@ class OpenAIProvider(ImageProvider):
     ) -> ProviderResult:
         """Generate one image. ``seed`` is ignored (gpt-image does not support it).
 
-        ``quality`` (low/medium/high/auto) is forwarded to the API and is the
+        ``quality`` (including xhigh/max on GPT Image 2.5) is forwarded to the API and is the
         primary driver of token cost. The endpoint returns a ``usage`` token
         object but no USD amount, so ``actual_cost_usd`` stays ``None``.
         """

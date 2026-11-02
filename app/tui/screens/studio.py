@@ -81,7 +81,9 @@ _FRAMING_VALUES = {pct for _, pct in _FRAMING_CHOICES}
 _QUALITY_CHOICES = [
     ("low · cheapest", "low"),
     ("medium · default", "medium"),
-    ("high · priciest", "high"),
+    ("high", "high"),
+    ("extra high · GPT Image 2.5", "xhigh"),
+    ("max · GPT Image 2.5", "max"),
     ("auto", "auto"),
 ]
 _QUALITY_VALUES = {value for _, value in _QUALITY_CHOICES}
@@ -1300,6 +1302,13 @@ class StudioScreen(Screen):
             card.update(f"[$error]{glyphs.CROSS} unknown model {self._model_key}[/]")
             return
         info = config.pricing.get_model_info(provider, model_id)
+        quality_select = self.query_one("#quality", Select)
+        quality = quality_select.value
+        quality_select.set_options([
+            (label, value) for label, value in _QUALITY_CHOICES
+            if value in info.available_qualities
+        ])
+        quality_select.value = quality if quality in info.available_qualities else info.default_quality
         price = (
             f"${info.price_per_image_usd:.4f}"
             if info.price_per_image_usd is not None

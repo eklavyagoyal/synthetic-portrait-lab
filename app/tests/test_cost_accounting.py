@@ -64,7 +64,7 @@ class FailOnceProvider(ImageProvider):
         return ProviderResult(image_bytes=PNG, actual_cost_usd=None)
 
 
-def _request(tmp_path, *, total=8, provider="openai", model_id="gpt-image-1",
+def _request(tmp_path, *, total=8, provider="openai", model_id="gpt-image-2",
              retry_failed=False, max_retries=0) -> BatchGenerationRequest:
     return BatchGenerationRequest(
         provider=provider,
@@ -83,7 +83,7 @@ def _request(tmp_path, *, total=8, provider="openai", model_id="gpt-image-1",
 
 
 def _price(config, quality="medium"):
-    return config.pricing.per_image_price("openai", "gpt-image-1", quality)
+    return config.pricing.per_image_price("openai", "gpt-image-2", quality)
 
 
 # Case A: 8 planned, 8 successful, no retries -> cost = 8 × per-attempt estimate.
@@ -143,7 +143,7 @@ async def test_case_c_uses_provider_reported_cost_and_usage(tmp_path):
 async def test_case_d_no_billing_is_estimate_only(tmp_path):
     config = AppConfig.load()
     gen = Generator(config)
-    run = gen.create_run(_request(tmp_path, total=2, provider="openai", model_id="gpt-image-1"))
+    run = gen.create_run(_request(tmp_path, total=2, provider="openai", model_id="gpt-image-2"))
     gen.confirm(run)
     run = await gen.execute(run, provider=CostProvider(cost=None))
 

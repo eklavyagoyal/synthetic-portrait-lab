@@ -73,7 +73,7 @@ _FRAMING_CHOICES = {
     30: "upper body · head 30%",
 }
 
-_QUALITY_CHOICES = ["low", "medium", "high", "auto"]
+_QUALITY_CHOICES = ["low", "medium", "high", "xhigh", "max", "auto"]
 
 # Distribution modes that require demographic bucket selections (everything but
 # EXACT, which is request-only and not exposed in this lightweight UI).
@@ -407,6 +407,12 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
             provider, model_id = _split_model_key(key)
             try:
                 info = cfg.pricing.get_model_info(provider, model_id)
+                qualities = info.available_qualities
+                if quality_select.options != qualities:
+                    quality_select.options = qualities
+                    if quality_select.value not in qualities:
+                        quality_select.value = info.default_quality
+                    quality_select.update()
                 sizes = info.supports_size or ["1024x1024"]
                 size_select.options = sizes
                 if size_select.value not in sizes:

@@ -259,10 +259,10 @@ def test_estimated_cost_uses_registry_price(tmp_path):
     config = AppConfig.load()
     gen = Generator(config)
     count = 5
-    # openai/gpt-image-1 is priced per quality in the registry (medium by default).
+    # openai/gpt-image-2 is priced per quality in the registry (medium by default).
     request = BatchGenerationRequest(
         provider="openai",
-        model_id="gpt-image-1",
+        model_id="gpt-image-2",
         age_buckets=["adult, 26 to 40"],
         gender_buckets=["female-presenting"],
         ethnicity_buckets=["East Asian"],
@@ -273,7 +273,7 @@ def test_estimated_cost_uses_registry_price(tmp_path):
     )
     run = gen.create_run(request)  # planning only — no spend, no network
 
-    price = config.pricing.per_image_price("openai", "gpt-image-1")
+    price = config.pricing.per_image_price("openai", "gpt-image-2")
     assert price is not None
     assert run.estimate.pricing_available is True
     assert run.estimate.price_per_image_usd == price

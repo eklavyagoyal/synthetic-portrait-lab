@@ -147,7 +147,7 @@ def _build_parser(cfg: AppConfig) -> argparse.ArgumentParser:
     parser.add_argument("--size", default="1024x1024", help="Image size (default: %(default)s).")
     parser.add_argument(
         "--quality",
-        choices=["low", "medium", "high", "auto"],
+        choices=["low", "medium", "high", "xhigh", "max", "auto"],
         default="medium",
         help="Render quality; drives price on token-billed models (default: %(default)s).",
     )

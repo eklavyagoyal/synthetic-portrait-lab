@@ -277,6 +277,48 @@ async def test_custom_resolution_survives_presets_restart_and_validation(app):
         assert studio._draft_request().capture.background_preset == "natural"
 
 
+@pytest.mark.parametrize("model_id", ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+async def test_image_25_supports_custom_sizes_quality_and_transparency(app, model_id):
+    from pydantic import SecretStr
+    from textual.widgets import Select, Input, Switch
+
+    app.config.settings.openai_api_key = SecretStr("test-key")
+    async with app.run_test(size=(150, 48)) as pilot:
+        await pilot.pause(0.3)
+        studio = _studio(app)
+        studio.set_model(f"openai::{model_id}")
+        await pilot.pause(0.2)
+        studio.query_one("#size", Select).value = "custom"
+        studio.query_one("#size-custom", Input).value = "2368x3344"
+        studio.query_one("#quality", Select).value = "max"
+        studio.query_one("#transparent-switch", Switch).value = True
+        await pilot.pause(0.3)
+        request = studio._draft_request()
+        assert request.model_id == model_id
+        assert request.quality == "max"
+        assert request.size == "2368x3344"
+        assert request.transparent_background
+        assert not studio.query_one("#expose-btn").disabled
+        studio.snapshot_prefs()
+        assert app.prefs.model_key == f"openai::{model_id}"
+        assert app.prefs.quality == "max"
+        assert app.prefs.transparent_background
+
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ExposeModal)
+        assert not app.screen._priced
+        assert app.screen.query_one("#expose-spend-input", Input)
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+
+        studio.set_model("openai::gpt-image-2")
+        await pilot.pause(0.3)
+        assert studio._draft_request().quality == "medium"
+        assert studio._draft_request().transparent_background
+        assert studio._draft_request().size == "2368x3344"
+
+
 async def test_head_only_mode_temporarily_disables_area_and_headroom(app):
     from textual.widgets import Select, Input, Switch
 

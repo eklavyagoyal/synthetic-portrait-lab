@@ -1,11 +1,11 @@
 """Image-size catalogue and validation.
 
 Most models accept only the fixed sizes listed in their registry
-``supports_size``. OpenAI's ``gpt-image-2`` additionally accepts arbitrary
-custom resolutions that satisfy a set of constraints, so for that model we
+``supports_size``. OpenAI's GPT Image 2 and 2.5 models additionally accept arbitrary
+custom resolutions that satisfy a set of constraints, so for those models we
 validate against the math rather than a fixed preset list.
 
-The constraints below are OpenAI's documented limits for ``gpt-image-2``. They
+The constraints below are OpenAI's documented limits for GPT Image 2 and 2.5. They
 are bundled as a convenience; verify against the current OpenAI image docs.
 """
 
@@ -23,7 +23,11 @@ GPT_IMAGE_2_MIN_PIXELS = 655_360
 GPT_IMAGE_2_MAX_PIXELS = 8_294_400
 
 # Provider/model pairs that accept custom sizes beyond their listed presets.
-_CUSTOM_SIZE_MODELS = {("openai", "gpt-image-2")}
+_CUSTOM_SIZE_MODELS = {
+    ("openai", "gpt-image-2"),
+    ("openai", "gpt-image-2.5-flare"),
+    ("openai", "gpt-image-2.5-sunburst"),
+}
 
 # ISO A4 portrait aspect ratio (210 mm × 297 mm).
 A4_PORTRAIT_ASPECT = 210 / 297

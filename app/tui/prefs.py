@@ -29,7 +29,7 @@ class Prefs:
     model_key: str = ""           # "provider::model_id"
     batch_size: int = 8
     variation: int = 0
-    quality: str = "medium"       # low | medium | high | auto
+    quality: str = "medium"       # low | medium | high | xhigh | max | auto
     head_height_pct: int = 60     # framing: head share of image height
     head_area_pct: Optional[float] = None  # optional head box / canvas area
     size: str = ""               # blank means the model's default resolution
@@ -123,8 +123,10 @@ def load(path: Optional[Path] = None) -> Prefs:
     prefs.mask_dpi = _clamp_int(prefs.mask_dpi, 150, 600, 300)
     if prefs.distribution not in ("even", "random", "weighted"):
         prefs.distribution = "even"
-    if prefs.quality not in ("low", "medium", "high", "auto"):
+    if prefs.quality not in ("low", "medium", "high", "xhigh", "max", "auto"):
         prefs.quality = "medium"
+    if prefs.model_key == "openai::gpt-image-1":
+        prefs.model_key = "openai::gpt-image-2.5-flare"
     if prefs.modality not in ("rgb", "ir"):
         prefs.modality = "rgb"
     try:

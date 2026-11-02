@@ -149,6 +149,10 @@ class ModelInfo(BaseModel):
     pricing_source: Optional[str] = None
     reports_actual_cost: bool = False
 
+    @property
+    def available_qualities(self) -> list[str]:
+        return self.supports_quality or ["low", "medium", "high", "auto"]
+
     def effective_price(self, quality: Optional[str] = None) -> Optional[float]:
         """Per-image price for a quality. Uses the per-quality table when present
         (falling back to the model's default quality), else the flat price."""
@@ -260,7 +264,7 @@ class BatchGenerationRequest(BaseModel):
     variation_level: int = Field(0, ge=0, le=3)
     size: str = "1024x1024"
     # Render quality. On token-billed models (gpt-image) this drives the price.
-    quality: str = "medium"   # low | medium | high | auto
+    quality: str = "medium"   # low | medium | high | xhigh | max | auto
     # Framing: how much of the image height the head (top of hair to chin) fills.
     # This is a generation instruction, not a verified measurement — see prompt_builder.
     head_height_pct: int = Field(60, ge=20, le=90)
@@ -298,8 +302,8 @@ class BatchGenerationRequest(BaseModel):
     @classmethod
     def _norm_quality(cls, v: str) -> str:
         v = (v or "medium").strip().lower()
-        if v not in {"low", "medium", "high", "auto"}:
-            raise ValueError("quality must be one of: low, medium, high, auto.")
+        if v not in {"low", "medium", "high", "xhigh", "max", "auto"}:
+            raise ValueError("quality must be one of: low, medium, high, xhigh, max, auto.")
         return v
 
     @field_validator("filename_prefix")
