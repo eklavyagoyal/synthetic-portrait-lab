@@ -21,7 +21,7 @@ output:    portrait_000001.png … + metadata.jsonl / .csv / manifest.json
 ## What it does
 
 - Runs portrait-generation batches from the terminal, across pluggable providers (`mock`, `openai`, `google`, `fal`, `replicate`).
-- Builds the prompts for you. Demographic buckets plus a variation level produce a consistent passport-style portrait prompt; hard constraints (front-facing, full head visible, one person, neutral expression, plain background) are always enforced.
+- Builds the prompts for you. Choose a studio portrait, a natural environmental portrait or a casual phone selfie, with selectable backgrounds, lighting, expression and framing. Front-facing gaze, a full visible head and one synthetic person remain fixed.
 - Shows generated portraits as they land — rendered in the terminal as half-block pixels.
 - Estimates cost before you spend, refuses to start until you confirm, and tracks live burn (every attempt, retries included) — never a fake "actual".
 - Tracks dataset coverage across age, gender, and ethnicity buckets as the batch fills in.
@@ -286,6 +286,8 @@ Everything you'd want to control on a run, and the flag that controls it:
 | Quality | `--quality {low,medium,high,auto}` | render quality; drives price on token-billed models (default medium) |
 | Framing | `--framing {close,standard,loose,upper-body}` | how much of the image height the head fills |
 | Head height | `--head-height-pct` | exact head share, 20–90; overrides `--framing` |
+| Head area | `--head-area-pct` | head bounding rectangle as % of the whole image, 1–80; overrides head-height framing and preserves canvas dimensions |
+| Scene and style | `--background` / `--lighting` / `--image-style` / `--expression` | override the existing prompt fields; also available in advanced prompt options |
 | Demographic buckets | `--age` / `--gender` / `--ethnicity` | repeatable, one whole bucket each; omit to use all configured |
 | Distribution | `--distribution {even,random,weighted,exact}` | how the count spreads across buckets |
 | Per-bucket weight | `--weight TOKEN=VALUE` | repeatable; used by `weighted` |
@@ -308,6 +310,60 @@ estimates without generating.
 
 Optional defaults live in `.env`: `PORTRAIT_DEFAULT_PROVIDER`, `PORTRAIT_DEFAULT_MODEL`, `PORTRAIT_OUTPUT_BASE_DIR`, `PORTRAIT_ALLOW_CUSTOM_BUCKETS`, `PORTRAIT_MODEL_REGISTRY_PATH`.
 
+### Scene and camera controls in the TUI
+
+The **Scene & camera** card is available directly in Studio for RGB portraits.
+Start with **Studio / ID**, **Natural portrait** (25% head area), or **Phone /
+selfie reference** (20% head area, 25% headroom, clear indoor plants behind the
+person), then adjust each choice independently. Starting presets preserve the
+selected model, canvas size, quality and demographic buckets. They turn off
+head-only A4 mode and mask segmentation so the scene framing can take effect.
+
+| Control | Choices |
+|---|---|
+| Background | neutral grey/off-white, plain white, natural mix, indoor, outdoor, office, home, park/garden, street/courtyard, indoor plants, cafe, library, custom |
+| Scene consistency | the same scene description for the batch, or different scenes within the selected category |
+| Background details | optional fixed details, such as a particular room layout, wall colour or furniture |
+| Photo style | automatic, studio/ID, environmental portrait, casual phone/selfie, custom |
+| Lighting | automatic, soft studio, daylight, overcast/shade, window light, indoor ambient, mixed indoor/window, custom |
+| Background focus | automatic, clear/recognizable, gently softened, strongly blurred |
+| Expression | neutral, relaxed/attentive, slight natural smile, custom |
+| Framing | head-height presets, an exact head-area percentage, and optional headroom above the hair |
+
+**Auto** style and lighting adapt to the actual indoor, outdoor or plain
+background, including each scene in a mixed batch. Explicit choices override
+automatic behaviour. Custom text fields appear when their **Custom** option is
+selected. A fixed scene reuses its description; independently generated images
+are not guaranteed to have identical background pixels.
+
+Canvas size, scene choices, custom descriptions and extra prompt rules are saved
+with the normal TUI preferences. Models that support custom resolutions expose
+**Custom resolution…**; invalid dimensions block generation before any API call.
+Switching a photo preset does not resize the canvas. IR iris mode hides the RGB
+scene controls and keeps its existing capture rules. Head-only A4 and mask modes
+temporarily deactivate head area and headroom while retaining the controls for
+when you return to scene portraits.
+
+The plan preview and cost confirmation show the chosen scene and framing. Every
+run manifest records the full capture settings, and each saved prompt records
+the resolved scene. Head size and headroom remain prompt-guided approximations.
+
+For portraits without a background, enable **Output → transparent PNG · no
+background** (also available in the GUI), or pass `--transparent-background`
+to the CLI. PNG is already the normal file format; this option explicitly
+requests an alpha channel using the OpenAI API's `background="transparent"`
+and `output_format="png"` settings. It supports OpenAI GPT Image models and
+the offline mock provider, for RGB portraits only. Other providers are rejected
+before generation when transparency is enabled.
+
+Transparency overrides the scene background, background details, scene variation
+and background focus. Auto/environmental style resolves to a studio cutout;
+phone style and explicit lighting/expression choices are retained, along with
+size, quality, framing, head area, headroom and demographics. Turn it off to
+restore the saved scene choices. The switch is saved in TUI preferences and
+recorded in the run manifest and per-image metadata. Custom prompt rules should
+also be consistent with a transparent background.
+
 **Buckets** (defaults — override with the flags above, or allow arbitrary ones with `PORTRAIT_ALLOW_CUSTOM_BUCKETS=true`):
 
 - Age — young adult 18–25 · adult 26–40 · middle-aged 41–60 · older adult 61–80
@@ -329,6 +385,24 @@ Optional defaults live in `.env`: `PORTRAIT_DEFAULT_PROVIDER`, `PORTRAIT_DEFAULT
 - *Framing* (`--framing` / `--head-height-pct`) sets the head's share of the image height, measured top of hair to chin: close headshot 75% · standard headshot 60% · loose headshot 45% · upper body 30%. `--head-height-pct` takes an exact value (20–90) and overrides the preset.
 
 > Framing is a prompt instruction, not a measured crop — the model approximates the head size, it isn't pixel-exact. Detecting the face box and cropping/padding to enforce it precisely is a planned post-processing step.
+
+For natural surroundings and a smaller person in the frame, use the existing
+background, lighting and image-style fields together. The optional **Head area %**
+field is available in both app interfaces and as `--head-area-pct`. It measures
+the tight rectangle around the full head (hair top to chin, including ears/hair)
+divided by the whole image area. A 3.2 × 2.3 head on a 9 × 6.5 picture is
+`100 × (3.2 × 2.3) / (9 × 6.5) ≈ 12.6%`; those physical dimensions are only an
+example and do not change the app's canvas size. Area framing is approximate,
+and requires A4 head-only framing and 3D mask segmentation to be off.
+
+```bash
+# Keep --size at your existing app resolution.
+python -m app.cli.generate --provider openai --model gpt-image-2 \
+  --size 2368x3344 --count 10 --head-area-pct 12.6 \
+  --background "a realistic everyday indoor or outdoor environment, visibly detailed" \
+  --lighting "natural ambient light consistent with the environment" \
+  --image-style "photorealistic environmental portrait" --concurrency 4 --yes
+```
 
 **Pricing** lives in `app/core/model_registry.json`, not in code. Point `PORTRAIT_MODEL_REGISTRY_PATH` at your own copy to override it. The bundled prices are starting points, not authoritative — verify them against each provider's current pricing. A `null` price means *unknown*: the app warns and requires explicit confirmation before spending.
 

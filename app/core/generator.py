@@ -304,6 +304,7 @@ class Generator:
             variation_level=opts.variation_level,
             size=run.request.size,
             quality=run.request.quality,
+            transparent_background=run.request.transparent_background,
             seed=opts.seed,
             exact_age=desc.exact_age if desc else None,
             appearance_signature=desc.signature() if desc else None,
@@ -336,6 +337,7 @@ class Generator:
                     model_id=run.request.model_id,
                     seed=opts.seed,
                     quality=run.request.quality,
+                    **({"transparent_background": True} if run.request.transparent_background else {}),
                 )
                 image_bytes = self._postprocess(run.request.modality, pr.image_bytes)
                 self.storage.save_image(run.output_dir, item.filename, image_bytes)

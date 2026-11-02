@@ -75,6 +75,21 @@ def _request(
 # --------------------------------------------------------------------------- #
 # Happy path
 # --------------------------------------------------------------------------- #
+def test_head_area_preserves_existing_canvas_and_rejects_head_only_mode(tmp_path):
+    cfg = AppConfig.load()
+    values = _request(tmp_path, total_count=1).model_dump()
+    values.update(
+        provider="openai", model_id="gpt-image-2", size="2368x3344", head_area_pct=12.6,
+    )
+    req = BatchGenerationRequest(**values)
+    run = Generator(cfg).create_run(req)
+    assert run.request.size == "2368x3344"
+    assert run.plan[0].prompt_options.head_area_pct == 12.6
+    for extra in ({"face_crop": True}, {"mask_print": MaskPrintOptions()}):
+        with pytest.raises(ValueError, match="turn off A4 face portrait"):
+            BatchGenerationRequest(**(values | extra))
+
+
 async def test_full_happy_path_with_mock(tmp_path):
     config = AppConfig.load()
     gen = Generator(config)

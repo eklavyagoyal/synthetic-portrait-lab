@@ -103,6 +103,200 @@ async def test_empty_dimension_blocks_expose(app):
         assert "ethnicity" in why
 
 
+async def test_head_area_reaches_prompt_and_prefs_without_changing_size(app):
+    from textual.widgets import Input, Select
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause(0.4)
+        studio = _studio(app)
+        size_before = studio.query_one("#size", Select).value
+        studio.query_one("#head-area", Input).value = "12.6"
+        await pilot.pause(0.4)
+        draft = studio._draft_request()
+        assert draft.head_area_pct == 12.6
+        assert draft.size == size_before
+        assert "12.6% of image area" in str(studio.query_one("#plan-headline").render())
+        studio.snapshot_prefs()
+        assert app.prefs.head_area_pct == 12.6
+        assert not studio.query_one("#expose-btn").disabled
+
+        studio.query_one("#head-area", Input).value = ""
+        await pilot.pause(0.3)
+        assert studio._draft_request().head_area_pct is None
+
+
+async def test_transparent_output_keeps_scene_settings_and_survives_modality_switch(app):
+    from textual.widgets import Input, Select, Switch
+    from app.core.batch_planner import plan_batch
+    from app.core.prompt_builder import build_prompt
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause(0.4)
+        studio = _studio(app)
+        studio.query_one("#background-preset", Select).value = "plants"
+        studio.query_one("#focus-preset", Select).value = "blurred"
+        studio.query_one("#head-area", Input).value = "20"
+        studio.query_one("#headroom", Input).value = "25"
+        studio.query_one("#quality", Select).value = "high"
+        before = studio._draft_request()
+        studio.query_one("#transparent-switch", Switch).value = True
+        await pilot.pause(0.4)
+        draft = studio._draft_request()
+        assert draft.transparent_background
+        assert draft.size == before.size
+        assert draft.quality == "high"
+        assert draft.head_area_pct == 20
+        assert draft.capture.headroom_pct == 25
+        assert studio.query_one("#background-preset", Select).disabled
+        assert studio.query_one("#focus-preset", Select).disabled
+        assert not studio.query_one("#expose-btn").disabled
+        prompt = build_prompt(plan_batch(draft)[0].prompt_options)
+        assert "PNG alpha channel" in prompt
+        assert "strong background blur" not in prompt
+        assert "Transparent PNG" in str(studio.query_one("#scene-summary").render())
+        studio.snapshot_prefs()
+        assert app.prefs.transparent_background
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ExposeModal)
+        from textual.widgets import Static
+        assert any(
+            "transparent PNG · no background" in str(widget.render())
+            for widget in app.screen.query(Static)
+        )
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+
+        studio.query_one("#modality", Select).value = "ir"
+        await pilot.pause(0.3)
+        assert not studio._draft_request().transparent_background
+        assert not studio.query_one("#transparent-row").display
+        studio.query_one("#modality", Select).value = "rgb"
+        await pilot.pause(0.3)
+        assert studio._draft_request().transparent_background
+        studio.query_one("#transparent-switch", Switch).value = False
+        await pilot.pause(0.3)
+        restored = studio._draft_request()
+        assert not restored.transparent_background
+        assert restored.capture.background_preset == "plants"
+        assert restored.capture.focus_preset == "blurred"
+        assert not studio.query_one("#background-preset", Select).disabled
+
+
+async def test_capture_presets_and_individual_overrides_reach_live_prompts(app):
+    from textual.widgets import Select, Input
+    from app.core.batch_planner import plan_batch
+    from app.core.prompt_builder import build_prompt
+
+    async with app.run_test(size=(150, 48)) as pilot:
+        await pilot.pause(0.3)
+        studio = _studio(app)
+        original_size = studio._draft_request().size
+        studio.query_one("#capture-profile", Select).value = "phone"
+        await pilot.pause(0.3)
+        req = studio._draft_request()
+        assert req.size == original_size
+        assert req.head_area_pct == 20
+        assert req.capture.headroom_pct == 25
+        assert req.capture.background_preset == "plants"
+        assert req.capture.style_preset == "phone"
+        assert studio.query_one("#framing", Select).disabled
+        assert not req.face_crop and req.mask_print is None
+        assert "smartphone selfie" in build_prompt(plan_batch(req)[0].prompt_options)
+
+        studio.query_one("#background-preset", Select).value = "white"
+        studio.query_one("#style-preset", Select).value = "auto"
+        studio.query_one("#lighting-preset", Select).value = "auto"
+        studio.query_one("#headroom", Input).value = "8"
+        await pilot.pause(0.3)
+        prompt = build_prompt(plan_batch(studio._draft_request())[0].prompt_options)
+        assert "Plain, evenly lit white background." in prompt
+        assert "smartphone selfie" not in prompt
+        assert "approximately 8% of image height below the top edge" in prompt
+
+
+async def test_custom_capture_fields_validate_and_restore_after_restart(app):
+    from textual.widgets import Select, Input, TextArea
+
+    async with app.run_test(size=(150, 48)) as pilot:
+        await pilot.pause(0.3)
+        studio = _studio(app)
+        for field in ("background", "style", "lighting", "expression"):
+            studio.query_one(f"#{field}-preset", Select).value = "custom"
+        studio.query_one("#opt-background", Input).value = "a particular workshop with blue cabinets"
+        studio.query_one("#opt-style", Input).value = "ordinary phone photograph"
+        studio.query_one("#opt-lighting", Input).value = "ambient workshop lighting"
+        studio.query_one("#opt-expression", Input).value = "a slight natural smile"
+        studio.query_one("#opt-extra-pos", TextArea).text = "Keep the background recognizable"
+        await pilot.pause(0.3)
+        assert studio.query_one("#custom-background").display
+        assert not studio.query_one("#expose-btn").disabled
+        studio.snapshot_prefs()
+        assert tui_prefs.save(app.prefs)
+
+        studio.query_one("#opt-background", Input).value = ""
+        await pilot.pause(0.3)
+        assert studio.query_one("#expose-btn").disabled
+        assert "custom background" in str(studio.query_one("#why-disabled").render())
+
+    restored = PortraitApp(app.config)
+    async with restored.run_test(size=(150, 48)) as pilot:
+        await pilot.pause(0.3)
+        studio = _studio(restored)
+        assert studio.query_one("#background-preset", Select).value == "custom"
+        assert studio.query_one("#opt-background", Input).value == "a particular workshop with blue cabinets"
+        assert studio.query_one("#opt-extra-pos", TextArea).text == "Keep the background recognizable"
+        assert studio._draft_request().lighting == "ambient workshop lighting"
+
+
+async def test_custom_resolution_survives_presets_restart_and_validation(app):
+    from textual.widgets import Select, Input
+
+    async with app.run_test(size=(150, 48)) as pilot:
+        await pilot.pause(0.3)
+        studio = _studio(app)
+        studio.set_model("openai::gpt-image-2")
+        await pilot.pause(0.2)
+        studio.query_one("#size", Select).value = "custom"
+        studio.query_one("#size-custom", Input).value = "2368x3344"
+        studio.query_one("#capture-profile", Select).value = "natural"
+        await pilot.pause(0.3)
+        assert studio._draft_request().size == "2368x3344"
+        assert studio.query_one("#size-custom-row").display
+        studio.snapshot_prefs()
+        assert tui_prefs.save(app.prefs)
+        studio.query_one("#size-custom", Input).value = "123x456"
+        await pilot.pause(0.3)
+        assert studio.query_one("#expose-btn").disabled
+
+    restored = PortraitApp(app.config)
+    async with restored.run_test(size=(150, 48)) as pilot:
+        await pilot.pause(0.3)
+        studio = _studio(restored)
+        assert studio._draft_request().size == "2368x3344"
+        assert studio._draft_request().capture.background_preset == "natural"
+
+
+async def test_head_only_mode_temporarily_disables_area_and_headroom(app):
+    from textual.widgets import Select, Input, Switch
+
+    async with app.run_test(size=(150, 48)) as pilot:
+        await pilot.pause(0.3)
+        studio = _studio(app)
+        studio.query_one("#capture-profile", Select).value = "phone"
+        await pilot.pause(0.2)
+        studio.query_one("#mask-print-switch", Switch).value = True
+        await pilot.pause(0.2)
+        req = studio._draft_request()
+        assert req.face_crop and req.head_area_pct is None and req.capture.headroom_pct is None
+        assert studio.query_one("#head-area", Input).disabled
+        assert studio.query_one("#headroom", Input).disabled
+        studio.query_one("#mask-print-switch", Switch).value = False
+        await pilot.pause(0.2)
+        assert studio._draft_request().head_area_pct == 20
+        assert studio._draft_request().capture.headroom_pct == 25
+
+
 async def test_modality_ir_swaps_face_controls_for_iris_realism(app):
     from textual.widgets import Select, Switch
 
@@ -371,7 +565,9 @@ async def test_cancel_double_press(app, slow_provider):
         assert not app.cancel_requested  # armed, not yet cancelled
         await pilot.press("ctrl+x")
         await pilot.pause(0.1)
-        assert app.cancel_requested
+        # In-flight frames may drain before this assertion; completion clears
+        # the transient cancellation flag and is also a successful cancel.
+        assert app.cancel_requested or app.run_state == "cancelled"
         await _wait_run_end(pilot, app)
         assert app.run_state == "cancelled"
         tele = app.telemetry

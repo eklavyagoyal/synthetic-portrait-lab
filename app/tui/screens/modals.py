@@ -128,6 +128,24 @@ class ExposeModal(ModalScreen[bool]):
                 )
                 yield Static(self._buckets_line())
                 yield Static(self._plan_line())
+                if req.modality.value == "rgb":
+                    capture = req.capture
+                    area = (
+                        f"head box ~{req.head_area_pct:g}% of image area"
+                        if req.head_area_pct is not None else f"head ~{req.head_height_pct}% of height"
+                    )
+                    room = "" if capture.headroom_pct is None else f" · headroom {capture.headroom_pct:g}%"
+                    scene = (
+                        "transparent PNG · no background"
+                        if req.transparent_background
+                        else f"{esc(capture.background_preset)} · {capture.background_variation}"
+                    )
+                    focus = "none (transparent)" if req.transparent_background else esc(capture.focus_preset)
+                    yield Static(
+                        f"[$text-muted]scene[/]    {scene} · style {esc(capture.style_preset)}\n"
+                        f"[$text-muted]capture[/]  light {esc(capture.lighting_preset)} · "
+                        f"focus {focus} · {area}{room}"
+                    )
                 if req.mask_print:
                     yield Static(
                         f"[$text-muted]3D mask[/]  {req.mask_print.width_mm:.1f} × "

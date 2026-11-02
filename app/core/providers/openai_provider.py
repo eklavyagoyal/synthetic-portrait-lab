@@ -65,6 +65,7 @@ class OpenAIProvider(ImageProvider):
         model_id: str,
         seed: Optional[int] = None,
         quality: Optional[str] = None,
+        transparent_background: bool = False,
     ) -> ProviderResult:
         """Generate one image. ``seed`` is ignored (gpt-image does not support it).
 
@@ -77,6 +78,10 @@ class OpenAIProvider(ImageProvider):
         payload = {"model": model_id, "prompt": prompt, "size": size, "n": 1}
         if quality:
             payload["quality"] = quality
+        if transparent_background:
+            if not model_id.startswith("gpt-image-"):
+                raise ProviderError("Transparent PNG output requires a GPT Image model.")
+            payload.update(background="transparent", output_format="png")
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         try:
@@ -105,7 +110,10 @@ class OpenAIProvider(ImageProvider):
             # Token-billed endpoint: usage is reported, a USD cost is not.
             actual_cost_usd=None,
             usage=usage if isinstance(usage, dict) else None,
-            provider_metadata={"model_id": model_id, "size": size, "quality": quality},
+            provider_metadata={
+                "model_id": model_id, "size": size, "quality": quality,
+                "transparent_background": transparent_background,
+            },
         )
 
     @staticmethod

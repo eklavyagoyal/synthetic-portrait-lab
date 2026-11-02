@@ -17,6 +17,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .appearance import Appearance
+from .capture import CaptureOptions
 from .iris import IrisAppearance, IrisRealismOptions
 
 
@@ -95,9 +96,15 @@ class PromptOptions(BaseModel):
     variation_level: int = Field(0, ge=0, le=3)
     # Framing: head height (top of hair to chin) as a share of the image height.
     head_height_pct: int = Field(60, ge=20, le=90)
+    # Optional head bounding-box area as a percentage of the whole canvas.
+    # When set, this replaces the head-height framing instruction.
+    head_area_pct: Optional[float] = Field(None, ge=1, le=80)
+    capture: CaptureOptions = Field(default_factory=CaptureOptions)
+    scene_index: int = Field(0, ge=0)
     # Canvas size "WxH" — informs the prompt's orientation line. None => square.
     size: Optional[str] = None
     background: str = "plain light gray or off-white background"
+    transparent_background: bool = False
     expression: str = "neutral, natural facial expression"
     lighting: str = "natural studio lighting"
     image_style: str = "photorealistic passport-style studio portrait"
@@ -257,11 +264,14 @@ class BatchGenerationRequest(BaseModel):
     # Framing: how much of the image height the head (top of hair to chin) fills.
     # This is a generation instruction, not a verified measurement — see prompt_builder.
     head_height_pct: int = Field(60, ge=20, le=90)
+    head_area_pct: Optional[float] = Field(None, ge=1, le=80)
+    capture: CaptureOptions = Field(default_factory=CaptureOptions)
     seed: Optional[int] = None
 
     # Output
     output_dir: Optional[str] = None      # explicit dir; if None storage derives a timestamped one
     filename_prefix: str = "portrait"
+    transparent_background: bool = False  # native alpha-channel PNG output
 
     # Reliability / throughput
     retry_failed: bool = True
@@ -304,6 +314,26 @@ class BatchGenerationRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_distribution(self) -> "BatchGenerationRequest":
+        if self.transparent_background:
+            if self.modality != CaptureModality.RGB_FACE:
+                raise ValueError("Transparent PNG output supports RGB portraits only.")
+            if not (
+                self.provider == "mock"
+                or (self.provider == "openai" and self.model_id.startswith("gpt-image-"))
+            ):
+                raise ValueError(
+                    "Transparent PNG output requires an OpenAI GPT Image model "
+                    "(or the offline mock provider). Turn off transparency for this model."
+                )
+        if (
+            self.modality == CaptureModality.RGB_FACE
+            and self.head_area_pct is not None
+            and (self.face_crop or self.mask_print)
+        ):
+            raise ValueError(
+                "Head-area framing requires a scene portrait: turn off A4 face portrait "
+                "and 3D mask segmentation. Keep the desired canvas size with the size setting."
+            )
         if self.distribution_mode == DistributionMode.EXACT:
             if not self.exact_counts:
                 raise ValueError("EXACT distribution requires non-empty `exact_counts`.")
@@ -371,6 +401,7 @@ class GenerationResult(BaseModel):
     variation_level: int
     size: str
     quality: str = "medium"
+    transparent_background: bool = False
     seed: Optional[int] = None
     # Diversification audit trail (None on legacy / non-diversified runs).
     exact_age: Optional[int] = None
@@ -415,6 +446,7 @@ class GenerationResult(BaseModel):
         rec["variation_level"] = self.variation_level
         rec["size"] = self.size
         rec["quality"] = self.quality
+        rec["transparent_background"] = self.transparent_background
         rec["seed"] = self.seed
         rec["appearance_signature"] = self.appearance_signature
         rec["appearance"] = self.appearance

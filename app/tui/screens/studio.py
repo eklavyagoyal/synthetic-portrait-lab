@@ -38,6 +38,10 @@ from textual.widgets import (
 )
 
 from app.core.batch_planner import plan_batch
+from app.core.capture import (
+    BACKGROUND_CHOICES, CAPTURE_PROFILES, EXPRESSION_CHOICES, FOCUS_CHOICES,
+    LIGHTING_CHOICES, STYLE_CHOICES, CaptureOptions,
+)
 from app.core.iris import IrisRealismOptions
 from app.core.models import (
     BatchGenerationRequest,
@@ -47,7 +51,9 @@ from app.core.models import (
     PlannedItem,
 )
 from app.core.prompt_builder import framing_label
-from app.core.sizes import resolve_iris_capture_size
+from app.core.sizes import (
+    accepts_custom_sizes, resolve_a4_portrait_size, resolve_iris_capture_size, validate_request_size,
+)
 
 from .. import glyphs, labels, prefs
 from ..widgets import BucketList, DistBars, Hero, MoneyBlock
@@ -175,11 +181,13 @@ class StudioScreen(Screen):
         #col-configure { width: 36; padding: 0 1 0 0; }
         #col-demo { width: 1fr; min-width: 34; padding: 0 1 0 0; }
         #col-readout { width: 46; }
+        #readout-scroll { height: 1fr; }
 
         &.-compact #studio-body { layout: vertical; overflow-y: auto; }
         &.-compact #col-configure, &.-compact #col-demo, &.-compact #col-readout {
             width: 100%; height: auto;
         }
+        &.-compact #readout-scroll { height: auto; }
 
         .card {
             height: auto;
@@ -210,6 +218,10 @@ class StudioScreen(Screen):
         #advanced-box Input { margin: 0 0 1 0; }
         #advanced-box TextArea { height: 4; margin: 0 0 1 0; }
         #portrait-style-fields { height: auto; }
+        .custom-capture-field { height: auto; }
+        #scene-summary { height: auto; color: $text-muted; margin: 1 0 0 0; }
+        #capture-help { height: auto; color: $text-muted; }
+        #transparent-help { height: auto; color: $text-muted; }
         #iris-realism-fields { height: auto; }
         #mask-print-controls {
             height: auto;
@@ -275,6 +287,8 @@ class StudioScreen(Screen):
         self._problems: list[Problem] = []
         self._preview_plan: list[PlannedItem] = []
         self._run_locked = False
+        self._size_model_key: Optional[str] = None
+        self._sizes_by_model: dict[str, str] = {}
 
     # ------------------------------------------------------------------ #
     # Layout
@@ -286,6 +300,7 @@ class StudioScreen(Screen):
     def compose(self) -> ComposeResult:
         config = self._config
         p: prefs.Prefs = self.app.prefs
+        capture = CaptureOptions.model_validate(p.capture)
         models = config.pricing.list_models()
         keys = {_model_key(m.provider, m.model_id) for m in models}
         want = _model_key(config.settings.default_provider, config.settings.default_model)
@@ -340,6 +355,9 @@ class StudioScreen(Screen):
                         allow_blank=False,
                         id="size",
                     )
+                    with Vertical(classes="custom-capture-field", id="size-custom-row"):
+                        yield Label("custom size · WIDTHxHEIGHT", classes="field-label")
+                        yield Input(value=p.size, placeholder="e.g. 2368x3344", id="size-custom")
                     yield Label("quality (affects price)", classes="field-label")
                     yield Select(
                         _QUALITY_CHOICES,
@@ -348,7 +366,7 @@ class StudioScreen(Screen):
                         id="quality",
                     )
                     yield Label(
-                        "framing · head height (hair→chin)",
+                        "head height preset · hair→chin",
                         classes="field-label",
                         id="framing-label",
                     )
@@ -357,6 +375,22 @@ class StudioScreen(Screen):
                         value=p.head_height_pct if p.head_height_pct in _FRAMING_VALUES else 60,
                         allow_blank=False,
                         id="framing",
+                    )
+                    yield Label(
+                        "head area % · optional",
+                        classes="field-label", id="head-area-label",
+                    )
+                    yield Input(
+                        value="" if p.head_area_pct is None else f"{p.head_area_pct:g}",
+                        type="number", placeholder="e.g. 12.6 · blank uses head height",
+                        valid_empty=True,
+                        validators=[Number(minimum=1, maximum=80)], id="head-area",
+                    )
+                    yield Label("headroom % · above hair", classes="field-label", id="headroom-label")
+                    yield Input(
+                        value="" if capture.headroom_pct is None else f"{capture.headroom_pct:g}",
+                        type="number", placeholder="e.g. 25 for the phone reference", valid_empty=True,
+                        validators=[Number(minimum=0, maximum=40)], id="headroom",
                     )
                     yield Label("batch size (images)", classes="field-label")
                     yield Input(
@@ -396,6 +430,13 @@ class StudioScreen(Screen):
                     yield Input(placeholder="auto (timestamped)", valid_empty=True, id="output-dir")
                     yield Label("filename prefix", classes="field-label")
                     yield Input(value=p.prefix, id="prefix")
+                    with Horizontal(classes="switch-row", id="transparent-row"):
+                        yield Switch(value=p.transparent_background, id="transparent-switch")
+                        yield Label("transparent PNG · no background")
+                    yield Static(
+                        "OpenAI GPT Image / mock · overrides scene background and blur; "
+                        "keeps portrait and camera settings.", id="transparent-help",
+                    )
                     with Horizontal(classes="switch-row"):
                         yield Switch(value=p.retry_failed, id="retry-switch")
                         yield Label("retry failed · max")
@@ -513,6 +554,57 @@ class StudioScreen(Screen):
                                 )
 
             with VerticalScroll(id="col-demo"):
+                with Vertical(classes="card", id="portrait-style-fields") as card:
+                    card.border_title = "scene & camera"
+                    yield Label("start from a preset · editable below", classes="field-label")
+                    yield Select(
+                        [("Keep current / custom", "custom"), ("Studio / ID", "studio"),
+                         ("Natural portrait · head area 25%", "natural"),
+                         ("Phone / selfie reference · head area 20%", "phone")],
+                        value="custom", allow_blank=False, id="capture-profile",
+                    )
+                    yield Label("background", classes="field-label")
+                    yield Select(BACKGROUND_CHOICES, value=capture.background_preset,
+                                 allow_blank=False, id="background-preset")
+                    yield Label("scene consistency", classes="field-label")
+                    yield Select(
+                        [("Same scene description for the batch", "fixed"),
+                         ("Vary scenes within the chosen category", "varied")],
+                        value=capture.background_variation, allow_blank=False, id="background-variation",
+                    )
+                    yield Label("background details · optional", classes="field-label")
+                    yield Input(value=capture.background_detail,
+                                placeholder="e.g. white walls, wooden shelves, no posters", id="background-detail")
+                    with Vertical(classes="custom-capture-field", id="custom-background"):
+                        yield Label("custom background description", classes="field-label")
+                        yield Input(value=p.background, id="opt-background")
+                    yield Label("photo / camera style", classes="field-label")
+                    yield Select(STYLE_CHOICES, value=capture.style_preset,
+                                 allow_blank=False, id="style-preset")
+                    with Vertical(classes="custom-capture-field", id="custom-style"):
+                        yield Label("custom photo style", classes="field-label")
+                        yield Input(value=p.image_style, id="opt-style")
+                    yield Label("lighting", classes="field-label")
+                    yield Select(LIGHTING_CHOICES, value=capture.lighting_preset,
+                                 allow_blank=False, id="lighting-preset")
+                    with Vertical(classes="custom-capture-field", id="custom-lighting"):
+                        yield Label("custom lighting", classes="field-label")
+                        yield Input(value=p.lighting, id="opt-lighting")
+                    yield Label("background focus", classes="field-label")
+                    yield Select(FOCUS_CHOICES, value=capture.focus_preset,
+                                 allow_blank=False, id="focus-preset")
+                    yield Label("expression", classes="field-label")
+                    yield Select(EXPRESSION_CHOICES, value=capture.expression_preset,
+                                 allow_blank=False, id="expression-preset")
+                    with Vertical(classes="custom-capture-field", id="custom-expression"):
+                        yield Label("custom expression", classes="field-label")
+                        yield Input(value=p.expression, id="opt-expression")
+                    yield Static(
+                        "Auto style and lighting follow the selected setting. Same scene means "
+                        "the same description, not identical pixels. Head area and headroom "
+                        "are approximate generation targets; presets keep your canvas size.",
+                        id="capture-help",
+                    )
                 yield BucketList("age", config.buckets.age, ages, id="age")
                 yield BucketList("gender", config.buckets.gender, genders, id="gender")
                 yield BucketList("ethnicity", config.buckets.ethnicity, eths, id="ethnicity")
@@ -526,23 +618,10 @@ class StudioScreen(Screen):
                         with Horizontal(classes="switch-row", id="face-crop-row"):
                             yield Switch(value=p.face_crop, id="face-crop-switch")
                             yield Label("A4 face portrait (prompt-only — head only, no clipping)")
-                        with Vertical(id="portrait-style-fields"):
-                            yield Label("background", classes="field-label")
-                            yield Input(
-                                value="plain light gray or off-white background", id="opt-background"
-                            )
-                            yield Label("expression", classes="field-label")
-                            yield Input(value="neutral, natural facial expression", id="opt-expression")
-                            yield Label("lighting", classes="field-label")
-                            yield Input(value="natural studio lighting", id="opt-lighting")
-                            yield Label("image style", classes="field-label")
-                            yield Input(
-                                value="photorealistic passport-style studio portrait", id="opt-style"
-                            )
                         yield Label("extra positive constraints (one per line)", classes="field-label")
-                        yield TextArea(id="opt-extra-pos")
+                        yield TextArea(p.extra_positive, id="opt-extra-pos")
                         yield Label("extra negative constraints (one per line)", classes="field-label")
-                        yield TextArea(id="opt-extra-neg")
+                        yield TextArea(p.extra_negative, id="opt-extra-neg")
                         with Vertical(id="iris-realism-fields"):
                             yield Label(
                                 "IR iris realism (only for IR · mixes non-ideal captures into the batch)",
@@ -573,14 +652,16 @@ class StudioScreen(Screen):
                         yield Static("", id="prompt-sample")
 
             with Vertical(id="col-readout"):
-                with Vertical(classes="card", id="estimate-card") as card:
-                    card.border_title = "estimate"
-                    yield MoneyBlock(id="money")
-                with Vertical(classes="card", id="plan-card") as card:
-                    card.border_title = "plan preview"
-                    yield Static("", id="plan-headline")
-                    yield DistBars(id="plan-bars")
-                    yield Static("", id="plan-items")
+                with VerticalScroll(id="readout-scroll"):
+                    with Vertical(classes="card", id="estimate-card") as card:
+                        card.border_title = "estimate"
+                        yield MoneyBlock(id="money")
+                    with Vertical(classes="card", id="plan-card") as card:
+                        card.border_title = "plan preview"
+                        yield Static("", id="plan-headline")
+                        yield Static("", id="scene-summary")
+                        yield DistBars(id="plan-bars")
+                        yield Static("", id="plan-items")
                 with Horizontal(id="expose-row"):
                     yield Button("", id="expose-btn")
                 yield Static("", id="why-disabled")
@@ -591,11 +672,13 @@ class StudioScreen(Screen):
     # other modality (an IR iris capture has no head, framing, size choice,
     # background, expression or image-style to set).
     _FACE_ONLY_SELECTORS = (
-        "#framing-label", "#framing",
+        "#framing-label", "#framing", "#head-area-label", "#head-area",
+        "#headroom-label", "#headroom",
         "#size-label", "#size",
         "#face-crop-row",
         "#mask-print-controls",
         "#portrait-style-fields",
+        "#transparent-row", "#transparent-help",
     )
     # Controls that only make sense for the IR iris modality.
     _IRIS_ONLY_SELECTORS = ("#iris-realism-fields",)
@@ -621,6 +704,67 @@ class StudioScreen(Screen):
         for selector in self._IRIS_ONLY_SELECTORS:
             for widget in self.query(selector):
                 widget.display = is_iris
+        self._apply_capture_fields()
+
+    def _apply_capture_fields(self) -> None:
+        if not self._composed:
+            return
+        is_face = str(self.query_one("#modality", Select).value) == "rgb"
+        transparent = is_face and self.query_one("#transparent-switch", Switch).value
+        for field in ("background", "style", "lighting", "expression"):
+            custom = self.query_one(f"#{field}-preset", Select).value == "custom"
+            self.query_one(f"#custom-{field}").display = custom and not (field == "background" and transparent)
+        for selector in ("#background-preset", "#background-detail", "#focus-preset"):
+            self.query_one(selector).disabled = self._run_locked or transparent
+        self.query_one("#size-custom-row").display = (
+            is_face and self.query_one("#size", Select).value == "custom"
+        )
+        head_only = (
+            self.query_one("#face-crop-switch", Switch).value
+            or self.query_one("#mask-print-switch", Switch).value
+        )
+        area_active = bool(self.query_one("#head-area", Input).value.strip()) and not head_only
+        self.query_one("#framing", Select).disabled = self._run_locked or area_active
+        self.query_one("#head-area", Input).disabled = self._run_locked or head_only
+        self.query_one("#headroom", Input).disabled = self._run_locked or head_only
+        fixed_background = (
+            self.query_one("#background-preset", Select).value in ("white", "neutral", "custom")
+        )
+        variation = self.query_one("#background-variation", Select)
+        if fixed_background and not self._run_locked:
+            variation.value = "fixed"
+        variation.disabled = self._run_locked or fixed_background or transparent
+
+    def _apply_capture_profile(self, name: str) -> None:
+        if self._run_locked or name not in CAPTURE_PROFILES:
+            return
+        profile = CAPTURE_PROFILES[name]
+        for field in ("background_preset", "background_variation", "style_preset",
+                      "lighting_preset", "focus_preset", "expression_preset"):
+            self.query_one("#" + field.replace("_", "-"), Select).value = profile[field]
+        self.query_one("#head-area", Input).value = (
+            "" if profile["head_area_pct"] is None else str(profile["head_area_pct"])
+        )
+        self.query_one("#headroom", Input).value = (
+            "" if profile["headroom_pct"] is None else str(profile["headroom_pct"])
+        )
+        self.query_one("#framing", Select).value = profile["head_height_pct"]
+        self.query_one("#background-detail", Input).value = ""
+        self.query_one("#face-crop-switch", Switch).value = False
+        self.query_one("#mask-print-switch", Switch).value = False
+        self._apply_capture_fields()
+
+    def _capture_options(self, *, head_only: bool = False, strict: bool = True) -> CaptureOptions:
+        values = {
+            field: str(self.query_one("#" + field.replace("_", "-"), Select).value)
+            for field in ("background_preset", "background_variation", "style_preset",
+                          "lighting_preset", "focus_preset", "expression_preset")
+        }
+        return CaptureOptions(
+            **values,
+            background_detail=self.query_one("#background-detail", Input).value.strip(),
+            headroom_pct=None if head_only else self._field_float("#headroom", strict=strict),
+        )
 
     def on_resize(self, event: events.Resize) -> None:
         self._apply_breakpoint(event.size.width)
@@ -649,10 +793,12 @@ class StudioScreen(Screen):
                 self._weights[event.input.bucket] = max(0.0, float(event.value))
             except ValueError:
                 pass
-        if isinstance(event, Select.Changed) and event.select.id == "size":
-            pass  # size has no downstream rebuild beyond the estimate
+        if isinstance(event, Select.Changed) and event.select.id == "capture-profile":
+            self._apply_capture_profile(str(event.value))
         if isinstance(event, Select.Changed) and event.select.id == "modality":
             self._apply_modality_fields()  # show/hide face-only controls
+        if self._composed:
+            self._apply_capture_fields()
         self._schedule_refresh()
 
     def _schedule_refresh(self) -> None:
@@ -724,6 +870,8 @@ class StudioScreen(Screen):
         head_height_pct = int(framing_value) if framing_value != Select.NULL else 60
         modality = CaptureModality(str(self.query_one("#modality", Select).value))
         size = str(size_value) if size_value != Select.NULL else "1024x1024"
+        if size == "custom":
+            size = self.query_one("#size-custom", Input).value.strip()
         face_crop = self.query_one("#face-crop-switch", Switch).value
         if modality == CaptureModality.IR_IRIS:
             # An IR iris capture has no head/framing and uses a standardized 4:3
@@ -765,6 +913,22 @@ class StudioScreen(Screen):
             # The face-only prompt gives the landmark gate the standardized
             # single-head input it requires.
             face_crop = True
+        capture = CaptureOptions()
+        transparent = modality == CaptureModality.RGB_FACE and self.query_one("#transparent-switch", Switch).value
+        if modality == CaptureModality.RGB_FACE:
+            capture = self._capture_options(head_only=face_crop)
+            for field, selector in (
+                ("background", "#opt-background"), ("style", "#opt-style"),
+                ("lighting", "#opt-lighting"), ("expression", "#opt-expression"),
+            ):
+                if field == "background" and transparent:
+                    continue
+                if (
+                    self.query_one(f"#{field}-preset", Select).value == "custom"
+                    and not self.query_one(selector, Input).value.strip()
+                ):
+                    raise ValueError(f"Enter a custom {field} description or choose a preset.")
+        validate_request_size(size, self._config.pricing.get_model_info(provider, model_id))
         iris_realism = IrisRealismOptions(
             eyelid_occlusion=self.query_one("#ir-occlusion-switch", Switch).value,
             off_gaze=self.query_one("#ir-off-gaze-switch", Switch).value,
@@ -788,9 +952,12 @@ class StudioScreen(Screen):
             size=size,
             quality=quality,
             head_height_pct=head_height_pct,
+            head_area_pct=None if face_crop or modality == CaptureModality.IR_IRIS else self._field_float("#head-area"),
+            capture=capture,
             seed=self._field_int("#seed"),
             output_dir=self.query_one("#output-dir", Input).value.strip() or None,
             filename_prefix=self.query_one("#prefix", Input).value or "portrait",
+            transparent_background=transparent,
             retry_failed=self.query_one("#retry-switch", Switch).value,
             max_retries=self._field_int("#max-retries", 3) or 0,
             concurrency=max(1, min(32, self._field_int("#concurrency", 1) or 1)),
@@ -988,6 +1155,7 @@ class StudioScreen(Screen):
         items_line = self.query_one("#plan-items", Static)
         sample = self.query_one("#prompt-sample", Static)
         if draft is None or any(p.blocking for p in self._problems):
+            self.query_one("#scene-summary", Static).update("")
             headline.update(
                 f"[$text-muted]{glyphs.DIAMOND_HOLLOW} the plan appears here once "
                 "the settings are valid[/]"
@@ -1008,6 +1176,7 @@ class StudioScreen(Screen):
         try:
             plan = plan_batch(plan_request)
         except Exception as exc:  # noqa: BLE001 - planning errors render as problems
+            self.query_one("#scene-summary", Static).update("")
             headline.update(f"[$error]{glyphs.CROSS} {esc(str(exc))}[/]")
             bars.update_from_counts({})
             items_line.update("")
@@ -1038,7 +1207,11 @@ class StudioScreen(Screen):
         if draft.modality == CaptureModality.IR_IRIS:
             geom = "iris capture · 4:3 landscape"
         else:
-            geom = f"{framing_label(draft.head_height_pct)} · head {draft.head_height_pct}%"
+            geom = (
+                f"head box {draft.head_area_pct:g}% of image area"
+                if draft.head_area_pct is not None
+                else f"{framing_label(draft.head_height_pct)} · head {draft.head_height_pct}%"
+            )
             if draft.mask_print:
                 geom += (
                     f" · 3D mask {draft.mask_print.width_mm:.0f}×"
@@ -1049,6 +1222,20 @@ class StudioScreen(Screen):
             f"[$text-muted]spread — age {asp} · gender {gsp} · ethnicity {esp}[/]\n"
             f"[$text-muted]size {esc(draft.size)} · {esc(draft.quality)} · {esc(geom)}[/]"
         )
+        scene_summary = self.query_one("#scene-summary", Static)
+        scene_summary.display = draft.modality == CaptureModality.RGB_FACE
+        if scene_summary.display:
+            background = dict((key, label) for label, key in BACKGROUND_CHOICES)[draft.capture.background_preset]
+            if draft.transparent_background:
+                background = "Transparent PNG · no background"
+            style = dict((key, label) for label, key in STYLE_CHOICES)[draft.capture.style_preset]
+            room = draft.capture.headroom_pct
+            room_text = "" if room is None else f" · headroom {room:g}%"
+            scene_summary.update(
+                f"[b]{esc(background)}[/]"
+                + ("\n" if draft.transparent_background else f" · {draft.capture.background_variation}\n")
+                + f"[$text-muted]{esc(style)}{room_text}[/]"
+            )
 
         bars.update_from_counts(
             {"age": age_counts, "gender": gender_counts, "ethnicity": eth_counts}
@@ -1130,8 +1317,35 @@ class StudioScreen(Screen):
         )
         size_select = self.query_one("#size", Select)
         sizes = info.supports_size or ["1024x1024"]
-        size_select.set_options([(s, s) for s in sizes])
-        size_select.value = info.default_size if info.default_size in sizes else sizes[0]
+        current = self._canvas_value()
+        if self._size_model_key is not None:
+            self._sizes_by_model[self._size_model_key] = current
+            desired = self._sizes_by_model.get(self._model_key, current)
+        else:
+            desired = self.app.prefs.size
+            if not desired and (self.app.prefs.face_crop or self.app.prefs.mask_print):
+                desired = resolve_a4_portrait_size(provider, model_id, info)
+        try:
+            validate_request_size(desired, info)
+        except ValueError:
+            desired = info.default_size if info.default_size in sizes else sizes[0]
+        choices = [(s, s) for s in sizes]
+        if accepts_custom_sizes(provider, model_id):
+            choices.append(("Custom resolution…", "custom"))
+        size_select.set_options(choices)
+        if desired in sizes:
+            size_select.value = desired
+        else:
+            self.query_one("#size-custom", Input).value = desired
+            size_select.value = "custom"
+        self._size_model_key = self._model_key
+        self._apply_capture_fields()
+
+    def _canvas_value(self) -> str:
+        value = self.query_one("#size", Select).value
+        if value == "custom":
+            return self.query_one("#size-custom", Input).value.strip()
+        return str(value) if value != Select.NULL else ""
 
     def set_model(self, key: str) -> None:
         if not self._composed or self._run_locked:
@@ -1222,6 +1436,7 @@ class StudioScreen(Screen):
             return
         for widget in self.query("Input, Select, Switch, TextArea, BucketList, ModelCard"):
             widget.disabled = active
+        self._apply_capture_fields()
         body = self.query_one("#studio-body")
         body.styles.opacity = 0.55 if active else 1.0
         self._refresh_expose_button(None if active else self._safe_draft())
@@ -1266,6 +1481,18 @@ class StudioScreen(Screen):
         framing_value = self.query_one("#framing", Select).value
         if framing_value != Select.NULL:
             p.head_height_pct = int(framing_value)
+        p.head_area_pct = self._field_float("#head-area", strict=False)
+        p.size = self._canvas_value()
+        try:
+            p.capture = self._capture_options(strict=False).model_dump()
+        except ValueError:
+            pass  # leave the last valid capture preferences available for recovery
+        p.background = self.query_one("#opt-background", Input).value
+        p.image_style = self.query_one("#opt-style", Input).value
+        p.lighting = self.query_one("#opt-lighting", Input).value
+        p.expression = self.query_one("#opt-expression", Input).value
+        p.extra_positive = self.query_one("#opt-extra-pos", TextArea).text
+        p.extra_negative = self.query_one("#opt-extra-neg", TextArea).text
         p.distribution = str(self.query_one("#distribution", Select).value)
         p.concurrency = (
             self._field_int("#concurrency", p.concurrency, strict=False) or p.concurrency
@@ -1275,6 +1502,7 @@ class StudioScreen(Screen):
         p.retry_failed = self.query_one("#retry-switch", Switch).value
         p.max_retries = self._field_int("#max-retries", p.max_retries, strict=False) or 0
         p.save_prompt = self.query_one("#save-prompt-switch", Switch).value
+        p.transparent_background = self.query_one("#transparent-switch", Switch).value
         p.face_crop = self.query_one("#face-crop-switch", Switch).value
         p.mask_print = self.query_one("#mask-print-switch", Switch).value
         p.mask_width_mm = self._field_float(

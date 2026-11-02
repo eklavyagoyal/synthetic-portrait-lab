@@ -13,6 +13,10 @@ Contract for new providers (followed by ``openai``/``fal``/``replicate``):
 * raise :class:`ProviderAuthError` for missing/invalid credentials and
   :class:`ProviderError` for any other failure (the engine handles retries);
 * return :class:`app.core.models.ProviderResult` with real image bytes.
+
+Providers supporting native transparency also accept ``transparent_background``.
+The engine sends this optional keyword only for transparent requests, which are
+validated against supported provider/model combinations before generation.
 """
 
 from __future__ import annotations
@@ -66,6 +70,7 @@ class ImageProvider(ABC):
         model_id: str,
         seed: Optional[int] = None,
         quality: Optional[str] = None,
+        transparent_background: bool = False,
     ) -> ProviderResult:
         """Generate one image. Must return real encoded bytes or raise."""
         raise NotImplementedError

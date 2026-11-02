@@ -106,6 +106,11 @@ def _build_parser(cfg: AppConfig) -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", help="Output directory (default: a timestamped dir).")
     parser.add_argument(
+        "--transparent-background", action="store_true",
+        help="Generate a transparent PNG without a background (OpenAI GPT Image / mock, RGB only). "
+        "Overrides scene background; keeps framing, lighting, expression, size and quality.",
+    )
+    parser.add_argument(
         "--distribution",
         choices=[m.value for m in DistributionMode],
         default=DistributionMode.EVEN.value,
@@ -159,6 +164,18 @@ def _build_parser(cfg: AppConfig) -> argparse.ArgumentParser:
         help="Head height (top of hair to chin) as a share of image height, 20-90. "
         "Overrides --framing.",
     )
+    parser.add_argument(
+        "--head-area-pct", type=float, metavar="PCT",
+        help="Full head bounding-box area as a percentage of the whole image, 1-80. "
+        "Overrides head-height framing without changing the canvas dimensions.",
+    )
+    for flag, field in (
+        ("--background", "background"),
+        ("--lighting", "lighting"),
+        ("--image-style", "image_style"),
+        ("--expression", "expression"),
+    ):
+        parser.add_argument(flag, default=BatchGenerationRequest.model_fields[field].default)
     parser.add_argument(
         "--prefix", default="portrait", help="Filename prefix (default: %(default)s)."
     )
@@ -324,8 +341,14 @@ def _build_request(args: argparse.Namespace, cfg: AppConfig) -> BatchGenerationR
         size=args.size,
         quality=args.quality,
         head_height_pct=head_height_pct,
+        head_area_pct=args.head_area_pct,
+        background=args.background,
+        lighting=args.lighting,
+        image_style=args.image_style,
+        expression=args.expression,
         seed=args.seed,
         output_dir=args.output,
+        transparent_background=args.transparent_background,
         filename_prefix=args.prefix,
         retry_failed=not args.no_retry,
         max_retries=args.max_retries,
@@ -373,8 +396,12 @@ def _print_confirmation(run: Run) -> None:
     print(f"Images: {run.total}")
     print(f"Size: {run.request.size}")
     print(f"Quality: {run.request.quality}")
+    if run.request.transparent_background:
+        print("Output: transparent PNG (no background)")
     if run.request.modality == CaptureModality.IR_IRIS:
         print("Framing: near-infrared iris capture (4:3 landscape)")
+    elif run.request.head_area_pct is not None:
+        print(f"Framing: head bounding box ~{run.request.head_area_pct:g}% of total image area")
     else:
         print(f"Framing: {framing_label(pct)} (head ~{pct}% of image height)")
     if run.request.mask_print:

@@ -16,6 +16,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from app.core.capture import CaptureOptions
+
 PREFS_PATH = Path(
     os.environ.get("PORTRAIT_TUI_PREFS", "~/.portrait_studio_tui.json")
 ).expanduser()
@@ -29,6 +31,18 @@ class Prefs:
     variation: int = 0
     quality: str = "medium"       # low | medium | high | auto
     head_height_pct: int = 60     # framing: head share of image height
+    head_area_pct: Optional[float] = None  # optional head box / canvas area
+    size: str = ""               # blank means the model's default resolution
+    capture: dict = field(default_factory=lambda: CaptureOptions(
+        background_preset="neutral", style_preset="auto", lighting_preset="auto",
+        expression_preset="neutral",
+    ).model_dump())
+    background: str = "plain light gray or off-white background"
+    expression: str = "neutral, natural facial expression"
+    lighting: str = "natural studio lighting"
+    image_style: str = "photorealistic passport-style studio portrait"
+    extra_positive: str = ""
+    extra_negative: str = ""
     distribution: str = "even"
     concurrency: int = 2
     prefix: str = "portrait"
@@ -38,6 +52,7 @@ class Prefs:
     retry_failed: bool = True
     max_retries: int = 3
     save_prompt: bool = True
+    transparent_background: bool = False
     thumb_size: str = "M"         # S | M | L
     seen_welcome: bool = False
     face_crop: bool = False
@@ -88,6 +103,12 @@ def load(path: Optional[Path] = None) -> Prefs:
     prefs.batch_size = _clamp_int(prefs.batch_size, 1, 100_000, 8)
     prefs.variation = _clamp_int(prefs.variation, 0, 3, 0)
     prefs.head_height_pct = _clamp_int(prefs.head_height_pct, 20, 90, 60)
+    if prefs.head_area_pct is not None:
+        try:
+            area = float(prefs.head_area_pct)
+            prefs.head_area_pct = area if 1 <= area <= 80 else None
+        except (TypeError, ValueError):
+            prefs.head_area_pct = None
     prefs.concurrency = _clamp_int(prefs.concurrency, 1, 32, 2)
     prefs.max_retries = _clamp_int(prefs.max_retries, 0, 10, 3)
     prefs.mask_width_mm = _clamp_float(prefs.mask_width_mm, 100.0, 300.0, 187.0)
@@ -106,6 +127,10 @@ def load(path: Optional[Path] = None) -> Prefs:
         prefs.quality = "medium"
     if prefs.modality not in ("rgb", "ir"):
         prefs.modality = "rgb"
+    try:
+        prefs.capture = CaptureOptions.model_validate({**Prefs().capture, **prefs.capture}).model_dump()
+    except (ValueError, TypeError):
+        prefs.capture = Prefs().capture
     return prefs
 
 

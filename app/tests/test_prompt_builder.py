@@ -8,8 +8,11 @@ and variation-level differentiation.
 
 from __future__ import annotations
 
+import random
+
 import pytest
 
+from app.core.appearance import sample_appearance
 from app.core.models import PromptOptions
 from app.core.prompt_builder import (
     HARD_REQUIREMENTS,
@@ -188,3 +191,46 @@ def test_face_portrait_mode_adds_extra_negatives_and_blocks_framing_drift() -> N
 def test_face_portrait_head_scale_capped_for_safe_margins() -> None:
     prompt = build_prompt(_options(face_crop=True, head_height_pct=75))
     assert "roughly 65% of the image height" in prompt
+
+
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+def test_natural_scene_has_no_conflicting_studio_requirements(level: int) -> None:
+    prompt = build_prompt(_options(
+        level=level,
+        background="an everyday park with visible trees and paths",
+        lighting="soft daylight matching the surroundings",
+        image_style="photorealistic environmental portrait",
+        head_area_pct=12.6,
+    ))
+    assert "studio" not in prompt.lower()
+    assert "passport" not in prompt.lower()
+    assert "approximately 12.6% of the TOTAL IMAGE AREA" in prompt
+    assert "approximately 60% of the image height" not in prompt
+    assert "Plain light gray or off-white background." not in prompt
+
+
+@pytest.mark.parametrize("size", ["1024x1024", "2368x3344", "1536x1024"])
+def test_head_area_target_does_not_depend_on_canvas_aspect(size: str) -> None:
+    prompt = build_prompt(_options(head_area_pct=12.6, size=size))
+    assert "approximately 12.6% of the TOTAL IMAGE AREA" in prompt
+    assert "(head width × head height) / (image width × image height)" in prompt
+    assert "approximately 60% of the image height" not in prompt
+
+
+def test_head_area_rejects_contradictory_head_only_prompt() -> None:
+    with pytest.raises(ValueError, match="Head-area framing"):
+        build_prompt(_options(head_area_pct=12.6, face_crop=True))
+
+
+def test_custom_scene_lighting_overrides_sampled_studio_lighting() -> None:
+    appearance = sample_appearance(
+        random.Random(1), age_bucket=AGE, gender_bucket=GENDER, ethnicity_bucket=ETHNICITY,
+    ).model_copy(update={"lighting": "soft frontal studio lighting"})
+    opts = _options(
+        appearance=appearance, lighting="soft daylight",
+        image_style="photorealistic environmental portrait", background="a natural park",
+    )
+    prompt = build_prompt(opts)
+    assert "studio" not in prompt.lower()
+    assert "soft daylight" in prompt
+    assert "soft frontal studio lighting" in build_prompt(_options(appearance=appearance))

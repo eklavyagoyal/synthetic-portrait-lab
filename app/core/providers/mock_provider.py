@@ -48,11 +48,12 @@ class MockProvider(ImageProvider):
         model_id: str,
         seed: Optional[int] = None,
         quality: Optional[str] = None,
+        transparent_background: bool = False,
     ) -> ProviderResult:
         self.ensure_ready()
         width, height = _parse_size(size)
         material = f"{prompt}|{seed}|{model_id}|{size}"
-        image_bytes = self._render(width, height, material)
+        image_bytes = self._render(width, height, material, transparent_background)
         return ProviderResult(
             image_bytes=image_bytes,
             content_type="image/png",
@@ -61,12 +62,15 @@ class MockProvider(ImageProvider):
         )
 
     @staticmethod
-    def _render(width: int, height: int, material: str) -> bytes:
+    def _render(width: int, height: int, material: str, transparent_background: bool = False) -> bytes:
         try:
             from PIL import Image, ImageDraw  # type: ignore
 
             base = _color_from(material)
-            img = Image.new("RGB", (width, height), base)
+            img = (
+                Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                if transparent_background else Image.new("RGB", (width, height), base)
+            )
             draw = ImageDraw.Draw(img)
             # faux centered "head" so the placeholder reads as a portrait
             cx, cy = width // 2, int(height * 0.45)

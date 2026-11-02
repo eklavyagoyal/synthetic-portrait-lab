@@ -57,12 +57,13 @@ def _triple(item) -> tuple[str, str, str]:
 
 def test_framing_and_size_threaded_into_prompt_options() -> None:
     req = _request(DistributionMode.EVEN, total=4).model_copy(
-        update={"head_height_pct": 75, "size": "1536x1024"}
+        update={"head_height_pct": 75, "head_area_pct": 12.6, "size": "1536x1024"}
     )
     items = plan_batch(req)
     assert items, "expected a non-empty plan"
     for it in items:
         assert it.prompt_options.head_height_pct == 75
+        assert it.prompt_options.head_area_pct == 12.6
         assert it.prompt_options.size == "1536x1024"
 
 

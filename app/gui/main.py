@@ -374,6 +374,10 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
             size=str(size_select.value or "1024x1024"),
             quality=str(quality_select.value or "medium"),
             head_height_pct=int(framing_select.value or 60),
+            head_area_pct=(
+                float(head_area_number.value)
+                if head_area_number.value not in (None, "") else None
+            ),
             seed=int(seed_number.value) if seed_number.value not in (None, "") else None,
             concurrency=max(1, int(concurrency_number.value or 1)),
             output_dir=(output_input.value or None) or None,
@@ -381,6 +385,7 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
             retry_failed=bool(retry_switch.value),
             max_retries=int(retries_number.value or 3),
             save_prompt=bool(save_prompt_switch.value),
+            transparent_background=bool(transparent_switch.value),
             background=str(opt_bg.value or "plain light gray or off-white background"),
             expression=str(opt_exp.value or "neutral, natural facial expression"),
             lighting=str(opt_light.value or "natural studio lighting"),
@@ -523,6 +528,12 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
                             _FRAMING_CHOICES, value=60, on_change=lambda _: refresh_cost(),
                         ).props("outlined dense").classes("w-full")
                     with ui.column().classes("flex-1 gap-1"):
+                        ui.label("Head area % (optional)").classes("section-label")
+                        head_area_number = ui.number(
+                            min=1, max=80, step=0.1, precision=1,
+                            on_change=lambda _: refresh_cost(),
+                        ).props('outlined dense placeholder="Overrides head height"').classes("w-full")
+                    with ui.column().classes("flex-1 gap-1"):
                         ui.label("Variation").classes("section-label")
                         variation_select = ui.select(
                             {v: k for k, v in _VARIATION_CHOICES}, value=0, on_change=lambda _: refresh_cost(),
@@ -596,6 +607,11 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
 
                 # Output
                 ui.label("Output").classes("section-label")
+                transparent_switch = ui.switch(
+                    "Transparent PNG · no background", value=False,
+                    on_change=lambda e: (opt_bg.set_enabled(not e.value), refresh_cost()),
+                ).props("color=secondary")
+                ui.label("OpenAI GPT Image / mock. Overrides the background; keeps portrait settings.").classes("text-xs text-muted")
                 with ui.row().classes("w-full gap-4 items-start no-wrap max-[640px]:flex-wrap"):
                     output_input = ui.input(
                         placeholder="leave blank for a timestamped folder",
@@ -822,6 +838,8 @@ def index() -> None:  # noqa: PLR0915 - one cohesive page builder
             ui.label(
                 f"{run.total} image(s) · {req.provider}/{req.model_id}"
             ).classes("text-sm mono").style(f"color: {COLOR_MUTED};")
+            if req.transparent_background:
+                ui.label("Transparent PNG · no background").classes("text-sm")
 
             ui.separator().style(f"background: {COLOR_HAIRLINE};")
 

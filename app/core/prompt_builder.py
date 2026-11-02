@@ -11,8 +11,10 @@ invariants — it never relaxes or contradicts them.
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
+from .capture import resolve_capture
 from .models import CaptureModality, PromptOptions
 from .sizes import A4_PORTRAIT_ASPECT, parse_size
 
@@ -67,37 +69,37 @@ FACE_PORTRAIT_NEGATIVES: list[str] = [
 # hard requirements above.
 _VARIATION_GUIDANCE: dict[int, list[str]] = {
     0: [
-        "Strict repeatability: keep the studio setup, framing and lighting as "
+        "Strict repeatability: keep the capture setup, framing and lighting as "
         "consistent and standardized as possible across images. Minimize variation.",
     ],
     1: [
-        "Low variation: keep an essentially identical studio setup.",
+        "Low variation: keep an essentially identical capture setup.",
         "Permit only very subtle differences in face shape and hairstyle.",
     ],
     2: [
-        "Moderate natural variation, all within a standardized passport/studio setup:",
+        "Moderate natural variation, all within the requested portrait setup:",
         "- subtle face-shape variation",
         "- natural hair length and style variation",
         "- slight, soft lighting variation",
         "- slight skin-texture variation",
-        "- small differences within a neutral, natural expression",
+        "- small differences within the requested facial expression",
     ],
     3: [
-        "High natural variation while strictly preserving every passport/studio "
+        "High natural variation while strictly preserving every portrait "
         "constraint above:",
         "- noticeable (but realistic) face-shape variation",
         "- varied natural hair length and style",
-        "- varied soft studio lighting",
+        "- varied soft lighting consistent with the requested scene",
         "- varied realistic skin texture",
         "- slight camera-distance variation — the full head, hair top, ears, "
-        "jawline and chin must remain fully visible and centered",
-        "- small natural differences within a neutral expression",
+        "jawline and chin must remain fully visible and centered, preserving the requested head scale",
+        "- small natural differences within the requested facial expression",
     ],
 }
 
 _FACE_PORTRAIT_VARIATION: dict[int, list[str]] = {
     0: [
-        "Strict repeatability: identical studio setup, identical head scale, "
+        "Strict repeatability: identical capture setup, identical head scale, "
         "identical margins, identical lighting. Minimize variation.",
     ],
     1: [
@@ -110,16 +112,16 @@ _FACE_PORTRAIT_VARIATION: dict[int, list[str]] = {
         "- natural hair length and style variation",
         "- slight, soft lighting variation",
         "- slight skin-texture variation",
-        "- small differences within a neutral expression",
+        "- small differences within the requested facial expression",
         "- do NOT change camera distance, head scale, or margins",
     ],
     3: [
         "High natural variation while strictly preserving every face-portrait rule above:",
         "- noticeable (but realistic) face-shape variation",
         "- varied natural hair length and style",
-        "- varied soft studio lighting",
+        "- varied soft lighting consistent with the requested scene",
         "- varied realistic skin texture",
-        "- small natural differences within a neutral expression",
+        "- small natural differences within the requested facial expression",
         "- do NOT change camera distance, head scale, or margins",
         "- the full head, hair top, ears, jawline, and chin must remain fully visible "
         "with all required empty margins on every side",
@@ -219,17 +221,69 @@ def framing_composition_lines(
     face_crop: bool = False,
     *,
     size: Optional[str] = None,
+    head_area_pct: Optional[float] = None,
+    headroom_pct: Optional[float] = None,
 ) -> list[str]:
     """Composition guidance describing how large the head should appear."""
+    if head_area_pct is not None:
+        if face_crop:
+            raise ValueError("Head-area framing cannot be combined with head-only face portraits.")
+        lines = [
+            "The subject is horizontally centered and front-facing, with natural human proportions.",
+            "Include the full head with margin above the hair; do not crop the hair, ears, or chin.",
+            (
+                "Head size is measured by the tight bounding rectangle enclosing the "
+                "entire head, from the top of the hair to the chin and across the ears "
+                "or hair, whichever is wider."
+            ),
+            (
+                f"The head bounding rectangle occupies approximately {head_area_pct:g}% "
+                "of the TOTAL IMAGE AREA: (head width × head height) / "
+                "(image width × image height). This percentage refers to area, not "
+                "to either individual dimension or to the skin silhouette."
+            ),
+            "Adjust camera distance to achieve that area while preserving the requested canvas dimensions.",
+            "Include the neck, shoulders, and torso wherever they naturally fall within this framing.",
+            "Keep the surrounding environment visible; do not enlarge or stretch the head to fill the frame.",
+        ]
+        parsed = parse_size(size) if size else None
+        if parsed:
+            width, height = parsed
+            # Approximate natural head proportions; area remains the actual
+            # target, with these dimensions serving as a useful model guide.
+            head_w = math.sqrt(width * height * head_area_pct / 100 * 0.72)
+            head_h = head_w / 0.72
+            if head_w < width and head_h < height:
+                lines.append(
+                    f"Useful size guide on this {width}×{height} canvas: a head box about "
+                    f"{round(head_w)} pixels wide × {round(head_h)} pixels tall. "
+                    "Adjust for the individual's natural head proportions while preserving the requested area."
+                )
+        if headroom_pct is not None:
+            lines.extend(_headroom_lines(headroom_pct))
+        return lines
     if face_crop:
         return _face_portrait_framing_lines(head_height_pct, size)
 
     pct = max(10, min(95, int(head_height_pct)))
-    return [
-        "The subject is centered and front-facing.",
+    lines = [
+        "The subject is horizontally centered and front-facing." if headroom_pct is not None
+        else "The subject is centered and front-facing.",
         "Include the full head with clean margin above the hair; do not crop the hair, ears, chin, or neck.",
         f"The head, measured from the top of the hair to the chin, occupies approximately {pct}% of the image height.",
         _shoulder_instruction(pct),
+    ]
+    if headroom_pct is not None:
+        lines.extend(_headroom_lines(headroom_pct))
+    return lines
+
+
+def _headroom_lines(pct: float) -> list[str]:
+    return [
+        f"Headroom: the top of the hair/head sits approximately {pct:g}% of image height "
+        "below the top edge; this controls empty background above the head, not head size.",
+        "Center the head horizontally; use the requested headroom for vertical placement, "
+        "keeping the full head and chin inside the image.",
     ]
 
 
@@ -271,6 +325,20 @@ def build_prompt(options: PromptOptions) -> str:
     if options.modality == CaptureModality.IR_IRIS:
         return _build_iris_prompt(options)
 
+    capture = resolve_capture(
+        options.capture, background=options.background, image_style=options.image_style,
+        lighting=options.lighting, expression=options.expression, index=options.scene_index,
+        seed=None if options.seed is None else options.seed - options.scene_index,
+        transparent_background=options.transparent_background,
+    )
+    options = options.model_copy(update={
+        "background": capture.background, "image_style": capture.image_style,
+        "lighting": capture.lighting, "expression": capture.expression,
+        "extra_positive_constraints": [*options.extra_positive_constraints, *capture.positive],
+        "extra_negative_constraints": [*options.extra_negative_constraints, *capture.negative],
+    })
+    headroom = None if options.face_crop else options.capture.headroom_pct
+
     lines: list[str] = []
     lines.append(
         "Generate a photorealistic portrait of one synthetic human person who does not exist."
@@ -281,9 +349,15 @@ def build_prompt(options: PromptOptions) -> str:
     # request-level defaults (background/expression/lighting/style) take effect,
     # while the structural requirements stay fixed. Defaults render verbatim.
     hard = list(HARD_REQUIREMENTS)
+    if headroom is not None:
+        hard[3] = "Horizontally centered composition, with the requested headroom."
     hard[4] = _as_requirement(options.expression)
     hard[5] = _as_requirement(options.background)
+    if options.image_style != PromptOptions.model_fields["image_style"].default:
+        hard[8] = _as_requirement(options.image_style)
     hard[9] = _orientation_requirement(options.size)
+    if headroom is not None:
+        hard[9] = hard[9].replace("keep the full head centered", "keep the full head horizontally centered")
     lines.append("Hard requirements:")
     for req in hard:
         lines.append(f"- {req}")
@@ -298,6 +372,8 @@ def build_prompt(options: PromptOptions) -> str:
         options.head_height_pct,
         options.face_crop,
         size=options.size,
+        head_area_pct=options.head_area_pct,
+        headroom_pct=headroom,
     ):
         lines.append(f"- {line}")
     lines.append("")
@@ -321,6 +397,17 @@ def build_prompt(options: PromptOptions) -> str:
             "these features (do not blend toward a generic average face):"
         )
         for line in options.appearance.to_prompt_lines():
+            # Explicit scene lighting wins over the sampled studio-lighting hint.
+            if (
+                options.lighting != PromptOptions.model_fields["lighting"].default
+                and line.startswith("Lighting on this subject:")
+            ):
+                continue
+            if (
+                options.expression != PromptOptions.model_fields["expression"].default
+                and line.startswith("Expression:")
+            ):
+                continue
             lines.append(f"- {line}")
         lines.append("")
 
